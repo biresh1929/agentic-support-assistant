@@ -122,15 +122,58 @@ def test_lookup_records_a_check_for_the_escalation_summary(client, routes):
     assert main.store.get("s4").checks_performed == ["order_lookup"]
 
 
-@pytest.mark.parametrize("order_id", ["TR-4525", "TR-4526"])
+@pytest.mark.parametrize("order_id", ["TR-4525"])
 def test_policy_dependent_statuses_hand_off_to_the_agent_loop(
     client, routes, agent, order_id
 ):
-    """Delayed and lost need policy, so tier 2 declines and tier 3 takes over."""
+    """Delayed needs policy, so tier 2 declines and tier 3 takes over.
+
+    TR-4526 used to be in this list. It is not any more: a lost parcel is
+    decided in tier 2 now, by the test below.
+    """
     routes["update?"] = order_status(order_id)
     say(client, "s5", "update?")
 
     assert agent.calls == ["update?"]
+
+
+@pytest.mark.parametrize("run", range(5))
+def test_lost_parcel_escalates_deterministically(client, routes, agent, run):
+    """TR-4526 is lost_in_transit, and get_order_status flags requires_human.
+
+    Regression for a fabricated handoff. This used to reach the agent loop,
+    which meant the escalation happened only if the model chose to call
+    escalate_to_human that turn. The harness caught a run where it replied
+    "I'll forward this to a human colleague" with escalated=False and no tool
+    call -- a promise with no ticket behind it -- and a later run where the
+    same input escalated correctly.
+
+    Repeated because the bug was intermittent: passing once was never the
+    property in question. The assertion that actually pins it is
+    `agent.calls == []` -- the model is not consulted at all, so there is
+    nothing left to vary.
+    """
+    routes["where is TR-4526?"] = order_status("TR-4526")
+    body = say(client, f"s-lost-{run}", "where is TR-4526?")
+
+    assert body["escalated"] is True
+    assert body["escalation_reason"] == "lost_parcel_claim"
+    assert agent.calls == []
+    assert "TR-4526" in body["response"]
+    assert "1.6" in body["response"]
+    assert main.store.get(f"s-lost-{run}").escalation_reason == "lost_parcel_claim"
+
+
+def test_lost_parcel_escalation_carries_a_usable_handoff(client, routes, agent):
+    """The ticket has to be worth picking up, not just exist."""
+    routes["where is TR-4526?"] = order_status("TR-4526")
+    say(client, "s-lost-ctx", "where is TR-4526?")
+
+    context = main.store.get("s-lost-ctx").to_escalation_context()
+    assert context["reason"] == "lost_parcel_claim"
+    assert context["order_id"] == "TR-4526"
+    assert context["customer_id"] == "C-101"
+    assert "order_lookup" in context["checks_already_performed"]
 
 
 @pytest.mark.parametrize("order_id", ["TR-4521", "TR-4522", "TR-4529", "TR-4524"])

@@ -42,6 +42,14 @@ FRUSTRATED = (
     "repeat yourself. I'm passing you to a human colleague now with everything "
     "we've covered so far."
 )
+LOST_PARCEL = (
+    "I'm sorry — the carrier has marked {order_id} as lost in transit. Under "
+    "policy 1.6 that's a lost-parcel claim rather than a return, and claims "
+    "like this are resolved by a human colleague rather than by me. I'm "
+    "passing it to one now, with everything we've covered so far. They'll "
+    "arrange either a free replacement or a full refund, whichever you prefer."
+)
+
 # Statuses whose correct answer depends on policy, so tier 2 declines them.
 POLICY_DEPENDENT_STATUSES = {"delayed", "lost_in_transit"}
 
@@ -143,6 +151,31 @@ def _handle_order_status(
         return _reply(state, fast_path.render_not_found(target), escalated=False)
 
     state.set_pending_question(None)
+
+    if order.get("requires_human"):
+        # Structural, not advisory. get_order_status has flagged this since it
+        # was written, but nothing consumed the flag, so the handoff happened
+        # only when the model happened to call escalate_to_human that turn.
+        # The harness caught the failure mode that leaves: the same question
+        # produced "I'll forward this to a human colleague" with escalated
+        # False and no tool call on one run, and a correct handoff on the next.
+        # A promise of a human with no ticket behind it is worse than a
+        # refusal, so the decision is taken here where it cannot vary.
+        #
+        # HUMAN_ONLY_STATUSES is currently exactly {lost_in_transit}; adding a
+        # status to it means revisiting this reason, which is why the mapping
+        # is spelled out rather than defaulted.
+        dispatch(
+            state,
+            "escalate_to_human",
+            {"reason": "lost_parcel_claim",
+             "customer_intent": "parcel marked lost in transit by the carrier"},
+        )
+        return _reply(
+            state,
+            LOST_PARCEL.format(order_id=order["order_id"]),
+            escalated=True,
+        )
 
     if fast_path.can_fast_path(order):
         return _reply(state, fast_path.render(order), escalated=False)
