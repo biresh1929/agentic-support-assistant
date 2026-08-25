@@ -6,8 +6,9 @@
     "_fixture": "TR-4530 delivered 2026-07-26, 3 days before the pinned clock. Apparel, not final sale: the clean yes.",
     "turns": [
       {"say": "hi, I'd like to return the kurta from order TR-4530",
-       "expect": {"tools_called": ["check_return_eligibility"], "escalated": false,
-                  "must_contain": ["TR-4530"]}},
+       "expect": {"tools_called": ["raise_return_request"], "escalated": false,
+                  "must_contain": ["TR-4530"],
+                  "must_not_contain": ["human colleague"]}},
       {"say": "unrelated - what are your support hours?",
        "expect": {"escalated": false}},
       {"say": "coming back to my return - how long have I got to send it back?",
@@ -30,8 +31,9 @@
     "_fixture": "TR-4522 pairs a returnable cotton tee with non-returnable ankle socks. A single yes/no would have to lie about one of them.",
     "turns": [
       {"say": "can I return the cotton tee from TR-4522?",
-       "expect": {"tools_called": ["check_return_eligibility"], "escalated": false,
-                  "must_contain": ["TR-4522"]}},
+       "expect": {"tools_called": ["raise_return_request"], "escalated": false,
+                  "must_contain": ["TR-4522"],
+                  "must_not_contain": ["human colleague"]}},
       {"say": "and the ankle socks in the same order?",
        "expect": {"escalated": false, "must_contain": ["2.3"]}},
       {"say": "so what can I actually send back?",
@@ -388,8 +390,12 @@
       {"say": "why can't I get my money back?",
        "expect": {"escalated": false, "must_contain": ["2.4"]}},
       {"say": "can I swap it for a different size then?",
-       "expect": {"escalated": false, "must_contain": ["exchange"]}},
-      {"say": "ok, thanks"}
+       "expect": {"escalated": false, "must_contain": ["size"],
+                  "tools_not_called": ["raise_return_request"]}},
+      {"say": "size L please",
+       "expect": {"escalated": false, "tools_called": ["raise_return_request"],
+                  "must_not_contain": ["human colleague"]}},
+      {"say": "great, thanks", "expect": {"escalated": false}}
     ],
     "case_checks": {
       "escalation": {"expect": "never"},

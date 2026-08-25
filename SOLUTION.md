@@ -111,7 +111,7 @@ retrieved text or a general "don't invent numbers" instruction, because the
 requirement is to be able to walk through it line by line and defend it, and
 neither of those alternatives can be.
 
-**Structural guardrails wherever the guarantee has to hold.** Three places
+**Structural guardrails wherever the guarantee has to hold.** Four places
 where a prompt instruction was not considered good enough:
 
 *There is no `apply_discount` tool.* Not a tool the model is told not to use —
@@ -141,6 +141,42 @@ explicit correction, then escalation as `unverified_claim` with no verdict
 stated. The detector is the router's own classification rather than a text
 scan of the reply, which would be fragile across phrasings and would redo work
 tier 1 already did. See the known-limitations section for the full account.
+
+*A staged return is re-derived, not taken on trust.* The brief asks the
+assistant to determine eligibility **and then act on it**, and for a while only
+the first half existed: an eligible item was narrated correctly and then handed
+to a human to actually raise, which is a worse experience than doing nothing —
+the customer is sent away for something the system could have done. The second
+half is `raise_return_request`, staged in the same sense as
+`escalate_to_human`: it returns a structured record and changes nothing
+external.
+
+The part worth defending is that it does not believe its caller. It calls
+`check_return_eligibility` itself and re-derives the verdict before staging
+anything, so a model that has talked itself into refunding jewellery cannot
+stage one by asserting it is eligible — `tests/test_returns.py` calls the tool
+directly with exactly those hostile arguments, because a guard that only holds
+when the caller is well behaved is not a guard. A final-sale item asked for as
+a refund is refused with the correct resolution returned so the agent can
+recover in one turn, and an exchange with no size comes back with
+`needs_info: ["requested_size"]` rather than staging half a record or
+inventing a size. Ownership is not reimplemented: the tool joins
+`ORDER_SCOPED_TOOLS` and inherits the existing cross-customer check.
+
+**The exchange flow does not yet complete end to end, and the reason is the
+router.** The harness shows the first half working: `c18` turn 3 answers *"you
+can exchange it for a different size (policy 2.4). Which size would you like
+instead?"*, which is exactly the intended behaviour. The customer's reply is
+then *"size L please"* — no order ID, no return vocabulary, just a size — and
+the intent gate classifies it `ambiguous`, so it never reaches the agent loop
+and the exchange is never staged. Nothing failed; the turn was routed the way
+the gate was told to route it. Asking a question creates a turn shape that did
+not exist before: a bare answer to something the assistant just asked. The
+intent-gate prompt already handles the analogous case for order IDs ("a message
+that is only an order ID ... is order_status"), and this needs the equivalent
+rule for a reply that answers the assistant's own pending question, which
+`ConversationState.pending_question` already tracks. Left unfixed here so the
+gap is visible rather than papered over mid-change.
 
 **A conversation harness as a separate layer from the unit tests.** The unit
 suite covers date arithmetic, the citation guard, the ownership check — things
@@ -201,6 +237,20 @@ ID arrives with the request and the binding becomes defence in depth, which is
 what it should be. If the channel is anonymous, this proxy is the *only* thing
 standing there and it is not enough on its own. The answer changes whether the
 cross-customer guard is a backstop or the front line.
+
+A harness run during a Groq outage made this concrete rather than theoretical.
+Every tier-3 turn failed with `model_call_failed`, so case `c11`'s opening
+eligibility question made no tool call at all — and because binding happens on
+a *successful* lookup, the session was left unbound. The next turn named
+another customer's order, bound the session to them, and disclosed the record.
+No code changed and nothing regressed; the guard behaved exactly as designed.
+The design just has a gap: **identity is established by a side effect of work
+succeeding, so when the work fails there is no identity, and the next order
+named wins.** A transient upstream outage silently downgrades the cross-customer
+guard for that session. That is not worth patching blind — the right fix
+depends entirely on the answer to this question. With a customer ID arriving on
+the request there is nothing to patch. Without one, binding needs to happen
+somewhere that cannot fail open.
 
 **4. When a final-sale item's exchange size is unavailable, what actually
 happens?** The policy contradicts itself here and the contradiction is
@@ -358,6 +408,22 @@ headroom is thin.
 `AgentResult` from the citation guard's `guard_retried` / `guard_failed`, so
 the two failure modes stay independently visible and testable rather than
 being conflated.
+
+### Policy 4.4's repeat-exchange limit cannot be enforced
+
+Policy **4.4** allows one exchange per item and requires human approval for a
+second. `raise_return_request` cannot enforce that, because nothing in the
+dataset records it. Every field in `orders.json` was checked — there is no
+`exchange_count`, no returns history array, no prior-resolution marker on an
+item, nothing that distinguishes a first exchange from a fifth.
+
+Rather than invent a heuristic for it or quietly ignore the clause, a staged
+exchange carries `repeat_exchange_checked: false` and a note saying the check
+was not performed and why. A downstream returns system consuming the record
+therefore knows it still owes that approval step, instead of assuming it was
+handled here. The fix is a data change rather than a code one: the order record
+needs to carry exchange history before the assistant can act on a rule about
+exchange history.
 
 ### A more specific policy clause can lose to a less specific one
 

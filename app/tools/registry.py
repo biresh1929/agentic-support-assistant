@@ -18,12 +18,18 @@ from app.tools.escalation import ESCALATION_REASONS, escalate_to_human
 from app.tools.eligibility import check_return_eligibility
 from app.tools.orders import customer_for_order, get_order_status
 from app.tools.policy import search_policy
+from app.tools.returns import raise_return_request
 
 logger = logging.getLogger(__name__)
 
 # Tools whose first argument identifies an order, and so must pass the
-# ownership check before they run.
-ORDER_SCOPED_TOOLS = {"get_order_status", "check_return_eligibility"}
+# ownership check before they run. A new order-scoped tool joins this set
+# rather than reimplementing the check, so ownership cannot be forgotten.
+ORDER_SCOPED_TOOLS = {
+    "get_order_status",
+    "check_return_eligibility",
+    "raise_return_request",
+}
 
 TOOL_SCHEMAS: list[dict] = [
     {
@@ -63,6 +69,51 @@ TOOL_SCHEMAS: list[dict] = [
                     "order_id": {"type": "string", "description": "Order ID, e.g. TR-4530."}
                 },
                 "required": ["order_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "raise_return_request",
+            "description": (
+                "Actually raise a return or exchange for ONE item, once "
+                "check_return_eligibility has confirmed that item is eligible. "
+                "Call this instead of telling the customer a human will start "
+                "their return. Do not call it speculatively, and do not call it "
+                "before eligibility is confirmed. For an exchange you must "
+                "already know the size the customer wants -- ask them first "
+                "rather than guessing. The tool re-checks eligibility itself "
+                "and will refuse anything that is not genuinely returnable."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string", "description": "Order ID, e.g. TR-4530."},
+                    "item_sku": {
+                        "type": "string",
+                        "description": (
+                            "SKU of the single item being returned, exactly as "
+                            "check_return_eligibility reported it."
+                        ),
+                    },
+                    "resolution": {
+                        "type": "string",
+                        "enum": ["refund", "exchange"],
+                        "description": (
+                            "What the customer wants. Final-sale items allow "
+                            "exchange only."
+                        ),
+                    },
+                    "requested_size": {
+                        "type": "string",
+                        "description": (
+                            "Required for an exchange: the size the customer "
+                            "asked for. Omit for a refund."
+                        ),
+                    },
+                },
+                "required": ["order_id", "item_sku", "resolution"],
             },
         },
     },
@@ -185,6 +236,18 @@ def dispatch(state: ConversationState, name: str, arguments: dict) -> dict:
         outcome = check_return_eligibility(str(arguments.get("order_id", "")))
         state.record_check("eligibility_check")
         if "error" not in outcome and outcome.get("order_id"):
+            state.set_active_order(outcome["order_id"])
+        return outcome
+
+    if name == "raise_return_request":
+        outcome = raise_return_request(
+            order_id=str(arguments.get("order_id", "")),
+            item_sku=str(arguments.get("item_sku", "")),
+            resolution=str(arguments.get("resolution", "")),
+            requested_size=arguments.get("requested_size"),
+        )
+        state.record_check("return_raised")
+        if outcome.get("staged") and outcome.get("order_id"):
             state.set_active_order(outcome["order_id"])
         return outcome
 

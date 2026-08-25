@@ -63,6 +63,15 @@ ELIGIBILITY_BYPASS_MESSAGE = (
     "confirm the return rules against your specific order. I'm passing you to a "
     "human colleague who can check it properly and tell you where you stand."
 )
+# Tools that derive eligibility deterministically rather than letting the model
+# infer it. raise_return_request belongs here because it calls
+# check_return_eligibility itself and refuses anything ineligible -- a turn that
+# staged a return has therefore had eligibility decided in Python, which is the
+# property this guard exists to enforce. Requiring the explicit call as well
+# would cost a forced retry on every successful return, to re-derive a verdict
+# already derived.
+ELIGIBILITY_DERIVING_TOOLS = {"check_return_eligibility", "raise_return_request"}
+
 # Used for exactly one call: the retry after an eligibility bypass. Everywhere
 # else the loop runs tool_choice="auto", because the model has to decide what
 # to reach for. Here it does not -- we already know which tool was skipped, and
@@ -165,7 +174,7 @@ def run(message: str, state: ConversationState) -> AgentResult:
                 # which order is under discussion.
                 bypassed = (
                     state.intent == "eligibility_check"
-                    and "check_return_eligibility" not in result.tools_used
+                    and not ELIGIBILITY_DERIVING_TOOLS.intersection(result.tools_used)
                 )
                 if not bypassed:
                     result.text = answer
