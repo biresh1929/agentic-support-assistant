@@ -6,10 +6,12 @@ checks where the order record is the whole answer, so those never reach a
 """
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from app.config import get_settings, today
+from app.retrieval.index import get_index
 from app.router import agent_loop, fast_path
 from app.router.intent_gate import classify
 from app.schemas import ChatRequest, ChatResponse
@@ -19,7 +21,24 @@ from app.tools.registry import dispatch
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Trendly Support Assistant", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Build the retrieval index before the first request, not during it.
+
+    get_index() is lru_cached, so whichever request touched it first used to
+    pay the whole build. On a small instance that was slow enough that the
+    first policy question blocked until the platform decided the service was
+    unhealthy and restarted it -- taking the process down instead of answering.
+    Paying it here means the health check does not pass until retrieval is
+    actually ready, which is what gates traffic correctly.
+    """
+    index = get_index()
+    logger.info("retrieval index ready: %s chunks", len(index.chunks))
+    yield
+
+
+app = FastAPI(title="Trendly Support Assistant", version="0.2.0", lifespan=lifespan)
 
 # In-memory, per-process. Swapping in Redis means replacing this line only --
 # ConversationState itself has no storage dependency.

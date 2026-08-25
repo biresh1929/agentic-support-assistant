@@ -49,7 +49,7 @@ docker run -p 8000:8000 --env-file .env trendly-assistant
 The container reads all configuration from the environment at runtime and
 listens on `$PORT` (default 8000), so the same image runs locally and on a
 platform that assigns the port dynamically. It runs as a non-root user, holds
-about 297MB resident, and shuts down cleanly on SIGTERM.
+about 176MB resident, and shuts down cleanly on SIGTERM.
 
 ### Local development
 

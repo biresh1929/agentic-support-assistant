@@ -21,8 +21,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app/ ./app/
-COPY data/ ./data/
+# The user is created before the app is copied so that the embedding model can
+# be warmed as that user below -- Chroma caches it under $HOME, and a model
+# downloaded as root is unreadable to the runtime user.
+RUN useradd --create-home --uid 10001 trendly
+
+COPY --chown=trendly:trendly app/ ./app/
+COPY --chown=trendly:trendly data/ ./data/
 
 # No secrets in the image. app/config.py reads everything from the environment,
 # and .dockerignore excludes .env so a local one can never be baked in by
@@ -31,10 +36,15 @@ COPY data/ ./data/
 ENV PORT=8000
 EXPOSE 8000
 
-# Non-root. Nothing here needs to write to the image: the Chroma index is
-# EphemeralClient, built in memory at startup.
-RUN useradd --create-home --uid 10001 trendly && chown -R trendly:trendly /app
 USER trendly
+
+# Bake the embedding model into the image. ChromaDB otherwise downloads
+# all-MiniLM-L6-v2 (~80MB) the first time anything is embedded, which on a
+# small instance happens inside the first policy question and is slow enough
+# to get the service restarted underneath it. Building the real index here
+# also fails the build rather than production if retrieval is broken; only the
+# cached model persists into the image, since the index itself is ephemeral.
+RUN python -c "from app.retrieval.index import get_index; get_index().search('warm', k=1)"
 
 # $PORT is read at run time, not baked in -- free-tier hosts assign it
 # dynamically and a hardcoded port fails health checks.

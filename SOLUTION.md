@@ -79,8 +79,8 @@ embedding function, which is `all-MiniLM-L6-v2` executed through ONNX Runtime.
 The alternative — the same model via `sentence-transformers` — pulls in PyTorch
 and roughly 2GB of image on top of what is already there. The model weights are
 identical, so retrieval quality should be unaffected, and the deploy footprint
-is the whole reason to prefer one over the other: the image is **775MB** and
-the running container holds steady at **297MB** resident, which fits inside a
+is the whole reason to prefer one over the other: the image is **1.12GB** and
+the running container holds steady at **176MB** resident, which fits inside a
 512MB free tier with room to spare. A torch-based build would not.
 
 *Stated honestly:* no retrieval evaluation was run to confirm quality parity
@@ -243,9 +243,17 @@ reliability argument and the performance argument point the same way. Escalating
 correctness; it bought both, because the fix consists of not calling the 120B
 model at all.
 
-**Memory:** 297MB resident, steady — unchanged after an agent-loop turn, since
-the Chroma index is built at startup rather than per request. The image is
-775MB. Both fit a 512MB free tier.
+**Memory:** 176MB resident, steady across repeated agent-loop turns, since
+the Chroma index is built once at startup rather than per request. That was
+not originally true and the first deployment found out: the index was built
+lazily inside whichever request touched it first, and on free-tier hardware
+(0.1 CPU) that request blocked long enough for the platform to restart the
+service under it, so every policy question returned 502. The index is now
+built in a lifespan hook, so the health check does not pass until retrieval is
+ready, and the embedding model is baked into the image at build time rather
+than downloaded on first use — which also dropped steady-state memory from
+297MB, because the model is now mapped from disk instead of pulled through the
+process on first use. The image is 1.12GB. Both fit a 512MB free tier.
 
 **Cost:** zero. Groq's free tier covered every call in development, the harness
 runs and the deployment, with no paid spend at any point. The architecture is
