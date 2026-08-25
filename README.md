@@ -13,25 +13,27 @@ One endpoint, `POST /chat`, plus `GET /health`.
 
 ## Live deployment
 
-```
-<!-- TODO: paste the Render URL here once deployed -->
-Base URL:  https://<service>.onrender.com
-Health:    https://<service>.onrender.com/health
+**https://trendly-assistant.onrender.com**
+
+```bash
+curl https://trendly-assistant.onrender.com/health
+
+curl -X POST https://trendly-assistant.onrender.com/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"demo","message":"can I return the kurta from TR-4530?"}'
 ```
 
-Not yet filled in — deploying needs the Render account, which is not something
-this repo can do for itself. [`render.yaml`](render.yaml) is a complete
-blueprint: **New → Blueprint → connect this repo → paste `GROQ_API_KEY` when
-prompted.** Everything else is already declared, and the key is marked
-`sync: false`, so it is entered in the dashboard and never stored in the repo
-or baked into the image.
+Deployed from [`render.yaml`](render.yaml). `GROQ_API_KEY` is set in Render's
+dashboard and marked `sync: false`, so it is never stored in the repo or baked
+into the image.
 
-Note for reviewers once it is up: Render's free tier sleeps after 15 minutes
-idle, so the first request after a quiet spell takes roughly 30–50 seconds
-while the container cold-starts. Every request after that is normal speed.
-Render was chosen over Railway for exactly this reason — Railway's free tier is
-a one-time trial credit that expires, and this needs to stay reachable for two
-weeks.
+**Note for reviewers.** Render's free tier sleeps after 15 minutes idle, so the
+first request after a quiet spell takes up to a minute while the container
+wakes and builds the retrieval index. Everything after that is normal speed —
+roughly a second for an order-status lookup, and ten to thirty for a policy or
+eligibility question, which is several Groq round trips on 0.1 of a CPU. Render
+was chosen over Railway because Railway's free tier is a one-time trial credit
+that expires, and this needs to stay reachable for two weeks.
 
 ## Running it
 
