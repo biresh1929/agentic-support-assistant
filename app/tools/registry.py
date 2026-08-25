@@ -122,11 +122,24 @@ class OwnershipError(dict):
 
 
 def _check_ownership(state: ConversationState, order_id: str) -> dict | None:
-    """Refuse orders belonging to someone other than this session's customer."""
+    """Bind the session on first use, then refuse anyone else's orders.
+
+    Binding happens here, for every order-scoped tool, rather than in the
+    get_order_status branch below. It used to live there, which meant a
+    conversation that opened with an eligibility check left the session
+    unbound -- and the next turn could then ask for any order at all, be
+    answered in full, and bind the session to *that* customer. The harness
+    case c11 walks exactly that path.
+    """
     owner = customer_for_order(order_id)
     if owner is None:
         return None  # a miss is not a leak; get_order_status reports not found
-    if state.customer_id and owner != state.customer_id:
+    if state.customer_id is None:
+        # There is no auth on /chat, so the first order successfully touched
+        # is the strongest available proxy for identity.
+        state.customer_id = owner
+        return None
+    if owner != state.customer_id:
         logger.warning(
             "session=%s blocked cross-customer lookup of %s", state.session_id, order_id
         )
@@ -166,10 +179,6 @@ def dispatch(state: ConversationState, name: str, arguments: dict) -> dict:
         state.record_check("order_lookup")
         if "error" not in result:
             state.set_active_order(result["order_id"])
-            # First successful lookup binds the session. There is no auth on
-            # /chat, so this is the strongest available proxy for identity.
-            if state.customer_id is None:
-                state.customer_id = result["customer_id"]
         return result
 
     if name == "check_return_eligibility":

@@ -109,3 +109,24 @@ def test_cash_on_delivery_refund_defers_bank_details_to_a_human():
 def test_card_payment_does_not_ask_for_bank_details():
     result = check_return_eligibility("TR-4530")  # credit card
     assert result["needs_info"] is None
+
+
+def test_an_eligibility_check_binds_the_session_like_a_lookup_does():
+    """Regression: binding used to happen only in the get_order_status branch.
+
+    A conversation that opened with an eligibility check therefore left the
+    session unbound, so the *next* turn could ask for any order at all, be
+    answered in full, and bind the session to that customer instead. Found by
+    harness case c11_cross_customer_by_order_id.
+    """
+    from app.state.conversation_state import ConversationState
+    from app.tools.registry import dispatch
+
+    state = ConversationState(session_id="s-bind")
+    dispatch(state, "check_return_eligibility", {"order_id": "TR-4530"})  # C-101
+    assert state.customer_id == "C-101"
+
+    leaked = dispatch(state, "get_order_status", {"order_id": "TR-4523"})  # C-102
+    assert leaked["error"] == "order does not belong to this customer"
+    assert "Quilted Bomber Jacket" not in str(leaked)
+    assert state.customer_id == "C-101"  # the refusal must not rebind
