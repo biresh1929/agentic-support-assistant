@@ -1,0 +1,35 @@
+# Render blueprint. With this committed, deploying is: New > Blueprint >
+# connect the repo > paste GROQ_API_KEY when prompted.
+#
+# Render over Railway deliberately: Railway's free tier is a one-time $5 trial
+# credit that expires, which will not survive a two-week reachability window.
+# Render's free web services stay up indefinitely. The cost is a cold start
+# after 15 minutes idle -- roughly 30-50s on the first request, then normal.
+services:
+  - type: web
+    name: trendly-assistant
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    # Oregon rather than Singapore: every non-trivial turn makes one to six
+    # round trips to Groq's US infrastructure, so proximity to Groq dominates
+    # proximity to the reviewer.
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      # sync: false means "prompt me, do not store this in the repo". The
+      # image contains no secret and .dockerignore excludes .env, so this is
+      # the only place the key is ever entered.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: ROUTER_MODEL
+        value: openai/gpt-oss-20b
+      - key: AGENT_MODEL
+        value: openai/gpt-oss-120b
+      # The orders.json fixtures are written relative to this date, not the
+      # wall clock. Leaving it unset makes every date in the dataset wrong.
+      - key: REFERENCE_DATE
+        value: "2026-07-29"
+      # PORT is injected by Render; the Dockerfile reads it at run time.
