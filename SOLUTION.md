@@ -111,8 +111,8 @@ retrieved text or a general "don't invent numbers" instruction, because the
 requirement is to be able to walk through it line by line and defend it, and
 neither of those alternatives can be.
 
-**Structural guardrails wherever the guarantee has to hold.** Two places where
-a prompt instruction was not considered good enough:
+**Structural guardrails wherever the guarantee has to hold.** Three places
+where a prompt instruction was not considered good enough:
 
 *There is no `apply_discount` tool.* Not a tool the model is told not to use —
 no tool, and no code path anywhere that computes a goodwill amount. The
@@ -131,6 +131,16 @@ all — a promise with no ticket behind it — and on the next run, same input, 
 correct handoff. The decision now happens in tier 2 before the model is
 consulted, and the regression test asserts the model is not consulted at all,
 because that is the only assertion that cannot go intermittent.
+
+*Eligibility answers must show their working.* The tool description telling the
+model to always call `check_return_eligibility` is a prompt, and the harness
+caught it being ignored on five turns across two runs. A turn the intent gate
+routed as `eligibility_check` is now rejected if it produces an answer without
+that tool appearing in the turn's tool calls: one bounded retry with an
+explicit correction, then escalation as `unverified_claim` with no verdict
+stated. The detector is the router's own classification rather than a text
+scan of the reply, which would be fragile across phrasings and would redo work
+tier 1 already did. See the known-limitations section for the full account.
 
 **A conversation harness as a separate layer from the unit tests.** The unit
 suite covers date arithmetic, the citation guard, the ownership check — things
@@ -264,44 +274,90 @@ the 120B model is only paid for on the traffic that genuinely needs reasoning.
 
 ## Known limitations
 
-### Eligibility can be reasoned about without calling the tool that decides it
+### The eligibility tool could be bypassed — fixed
+
+*This was a known limitation and is now a structural guarantee. Kept here
+rather than deleted, because what the harness found is the argument for the
+fix.*
 
 `check_return_eligibility` exists so that date arithmetic, category exclusions
-and final-sale rules are computed in Python rather than inferred by a language
-model — 29 days versus 31, "delivered" versus "dispatched", jewellery being
-non-returnable even well inside the window. Its tool description tells the
-model, in capitals, to *always* call it instead of working out eligibility
-itself.
+and final-sale rules are computed in Python rather than inferred. Its tool
+description tells the model, in capitals, to always call it. That instruction
+is a prompt, not a guarantee, and the conversation harness caught the model
+ignoring it: in `c08` turn 2, `c17` turns 1 and 2, and `c18` turn 1 — five
+bypassed turns across two separate full runs — it called `get_order_status`
+and `search_policy` and then reasoned its way to a returnable /
+non-returnable verdict from raw policy text, never calling the deterministic
+tool at all. The answers it produced happened to be correct. That is luck, and
+the reason the tool exists is not to depend on it.
 
-That instruction is a prompt, not a guarantee, and the conversation harness
-caught the model ignoring it. In several cases (`c08` turn 2, `c17` turn 1,
-`c18` turn 1 — reproducibly, across separate runs) the model called
-`get_order_status` and `search_policy` and then reasoned its way to a
-returnable / non-returnable verdict from the raw policy text, never calling
-the deterministic tool at all. The answers it produced happened to be correct.
-That is luck, and the whole reason the tool exists is not to depend on it.
+**The detector is the intent gate, not a text scan.** The obvious
+implementation — regex the reply for eligibility-shaped claims — is fragile
+across phrasings and duplicates work tier 1 already does. The gate has already
+separated `eligibility_check` from `policy_question` before the loop runs, and
+`state.intent` holds that classification for the current turn. So the rule is
+simply: if this turn was routed as an eligibility question, then
+`check_return_eligibility` must appear in *this turn's* `tools_used` before the
+answer is accepted.
 
-This is the one place in the app where a correctness guarantee rests on the
-model's compliance rather than on structure, and the contrast with the
-discount guardrail is deliberate and worth stating: the assistant cannot offer
-a discount because there is no `apply_discount` tool and no code path that
-computes a goodwill amount — the capability does not exist to be talked into,
-so no prompt instruction is load-bearing. Eligibility has no equivalent, and
-prompt instructions alone are not a strong enough basis for a guarantee we
-would want to defend.
+The check sits in `agent_loop.run()` immediately after the citation guard, in
+that order deliberately: a bypassed answer may also be ungrounded, and
+ungroundedness is the more fundamental problem. On first detection the answer
+is rejected, a correction message is appended telling the model to call the
+tool and not determine eligibility itself, and the loop continues. On a second
+bypass it escalates as `unverified_claim` — reusing that reason rather than
+adding an enum value, since an eligibility verdict the system cannot confirm
+was properly derived is exactly what it already means, and a new value would
+have to be added in three places and would route nowhere different. The
+escalation message states no verdict at all: repeating the rejected answer,
+even softened, would ship the claim being rejected.
 
-A production-grade fix would follow the shape of the citation guard, which
-already rejects an answer that cites a clause it never retrieved: parse the
-response for eligibility-shaped claims — any returnable / not-returnable
-verdict, any statement about the return window applying or having closed — and
-reject or retry any response that makes such a claim without
-`check_return_eligibility` appearing in that turn's tool calls. The retry
-would carry the tool result, exactly as `correction_prompt` carries the
-retrieved sections today.
+**Turn-scoped, not conversation-scoped.** A follow-up like *"why can't I get
+my money back?"* on the same order must call the tool again. The tool is
+deterministic, side-effect-free and needs no model call, its `reasons` field
+answers a "why" follow-up directly, and remembering an earlier call would go
+stale the moment a correction changed which order is under discussion.
 
-This was identified and left as a known gap given the time budget. Building
-the claim detector is real added scope, and the harness now makes the failure
-visible on every run, which is the more important half.
+**The retry had to be forced, not requested.** The first version of this
+appended the correction and let the loop run on with `tool_choice="auto"`,
+which meant the model spent a whole reasoning round deciding whether to comply
+before calling the tool. That was expensive enough to matter: the harness turn
+deadline is 45s, and two turns that had previously passed cleanly went over it
+and were recorded as failures. Since the retry is the one place in the loop
+where the tool that must be called is already known, that call now sets
+`tool_choice` to `check_return_eligibility` directly. The forcing is one-shot
+and resets immediately, so the main loop and the citation guard's retry keep
+reasoning freely -- the latter genuinely needs to, because it may have to
+retrieve again rather than re-call a fixed tool.
+
+Measured on the same turns, across three full harness runs:
+
+| turn | before the guard | guard, asking | guard, forcing |
+|---|---|---|---|
+| c17 t1 | 25.3s (bypassed) | 35.2s | **12.6s** |
+| c01 t3 | 10.9s | 40.7s | **6.7s** |
+| c02 t1 | 28.0s | *timeout* | **6.8s** |
+| c18 t1 | 13.4s (bypassed) | *timeout* | **41.7s** |
+| c08 t2 | 4.4s (bypassed) | 34.9s | *timeout* |
+
+Across the suite that is 65/68 turns landing inside the deadline before the
+change and 67/68 after, p90 latency down from 27.9s to 16.6s, and quality from
+80.6 to 91.5 -- most of which is c18 recovering the score it had lost purely to
+a timeout rather than to bad behaviour.
+
+The last row is the honest one. c08 t2 was fine before the guard existed,
+because it bypassed the tool; it now does the full work and, on this run, went
+over the deadline. Across runs it is a different heavy turn each time, so what
+this really shows is that a 45s budget is marginal for an eligibility turn that
+looks up an order, retrieves policy, calls the tool and then writes an answer.
+That is a property of the workload on 0.1 of a CPU, not of the guard, and the
+honest reading is that correctness here costs latency and the remaining
+headroom is thin.
+
+`eligibility_retried` and `eligibility_bypass_failed` are separate fields on
+`AgentResult` from the citation guard's `guard_retried` / `guard_failed`, so
+the two failure modes stay independently visible and testable rather than
+being conflated.
 
 ### A more specific policy clause can lose to a less specific one
 
