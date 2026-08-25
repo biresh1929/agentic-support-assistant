@@ -50,7 +50,9 @@ def classify(message: str, state: ConversationState) -> Routing:
                 {"role": "system", "content": INTENT_GATE_SYSTEM},
                 {
                     "role": "system",
-                    "content": context_hint(state.active_order_id, state.intent),
+                    "content": context_hint(
+                        state.active_order_id, state.intent, state.pending_question
+                    ),
                 },
                 {"role": "user", "content": message},
             ],

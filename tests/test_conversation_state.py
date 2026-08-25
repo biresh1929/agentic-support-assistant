@@ -77,3 +77,23 @@ def test_store_returns_the_same_state_across_calls():
 def test_store_returns_none_for_unknown_session_via_get():
     store = ConversationStore()
     assert store.get("does-not-exist") is None
+
+
+def test_context_hint_reports_an_outstanding_question():
+    """The router's pending-answer rule keys off this exact sentence."""
+    from app.prompts.intent_gate import context_hint
+
+    hint = context_hint("TR-4528", "eligibility_check", "the requested size for this return")
+
+    assert "TR-4528" in hint
+    assert "eligibility_check" in hint
+    assert "The assistant has already asked the customer for" in hint
+    assert "requested size" in hint
+
+
+def test_context_hint_says_nothing_about_questions_when_none_is_pending():
+    """Absent the sentence, the normal ambiguous rules must still apply."""
+    from app.prompts.intent_gate import context_hint
+
+    assert "already asked" not in context_hint("TR-4521", "order_status", None)
+    assert context_hint(None, None, None).startswith("No prior context")

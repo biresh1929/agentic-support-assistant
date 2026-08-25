@@ -211,6 +211,17 @@ def _run_agent(message: str, state: ConversationState) -> ChatResponse:
         "session=%s agent used %s tool call(s): %s",
         state.session_id, result.tool_calls_made, result.tools_used,
     )
+    # Whether the assistant just asked something is decided by what it actually
+    # said, not by which tools ran. The prompt tells it to ask for a missing
+    # size in prose rather than calling the staging tool and letting that fail,
+    # so the tool's needs_info never fires on that path and cannot be the only
+    # signal. Next turn the router is told a question is outstanding, which is
+    # what keeps a bare "size L please" from being read as a new, vague request.
+    if result.text.strip().endswith("?"):
+        if not state.pending_question:
+            state.set_pending_question("the detail it just asked the customer for")
+    else:
+        state.set_pending_question(None)
     return _reply(state, result.text, escalated=result.escalated)
 
 

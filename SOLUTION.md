@@ -163,20 +163,42 @@ recover in one turn, and an exchange with no size comes back with
 inventing a size. Ownership is not reimplemented: the tool joins
 `ORDER_SCOPED_TOOLS` and inherits the existing cross-customer check.
 
-**The exchange flow does not yet complete end to end, and the reason is the
-router.** The harness shows the first half working: `c18` turn 3 answers *"you
-can exchange it for a different size (policy 2.4). Which size would you like
-instead?"*, which is exactly the intended behaviour. The customer's reply is
-then *"size L please"* — no order ID, no return vocabulary, just a size — and
-the intent gate classifies it `ambiguous`, so it never reaches the agent loop
-and the exchange is never staged. Nothing failed; the turn was routed the way
-the gate was told to route it. Asking a question creates a turn shape that did
-not exist before: a bare answer to something the assistant just asked. The
-intent-gate prompt already handles the analogous case for order IDs ("a message
-that is only an order ID ... is order_status"), and this needs the equivalent
-rule for a reply that answers the assistant's own pending question, which
-`ConversationState.pending_question` already tracks. Left unfixed here so the
-gap is visible rather than papered over mid-change.
+**Asking a question created a turn shape the router had never seen — found
+and fixed.** The harness caught the exchange flow dying one turn short. `c18`
+turn 3 did exactly the right thing:
+
+> *"Since the Oxford Shirt is a final-sale item, you can exchange it for a
+> different size. Which size would you like instead?"*
+
+and the customer's reply — *"size L please"*, no order ID, no return vocabulary,
+just a size — was classified `ambiguous`, so it never reached the agent loop and
+nothing was staged. Nothing had failed; the turn was routed the way the gate had
+been told to route it. Adding a question to the assistant's repertoire had
+created a new kind of message: a bare answer to something it had just asked.
+
+`ConversationState.pending_question` already existed and was already tracked,
+so the fix was to use it — passed into `context_hint()` alongside the active
+order and the previous intent, and paired with an intent-gate rule that fires
+only when that sentence is present, returning the previous intent instead of
+`ambiguous`. Probing the live classifier directly shows both halves working:
+with a pending question, `"size L please"`, `"L"`, `"medium"` and `"yes please"`
+all classify `eligibility_check`; without one, the same messages still classify
+`ambiguous`, so the ordinary rules are untouched.
+
+The first version of this fix looked right and did not work, which is worth
+recording. `pending_question` was only being set when `raise_return_request`
+came back needing a size — but the system prompt tells the model to ask for a
+missing size *in prose* rather than calling the staging tool and letting it
+fail, so that path never ran and the flag was never set. The signal has to come
+from what the assistant actually said, not from which tools happened to fire:
+a reply ending in a question mark now records that something is outstanding,
+and anything else clears it. Only live testing surfaced that; the harness case
+had passed once by luck of classification.
+
+Before and after on `c18`, same five turns: **76.9% → 96.2%**, and the
+conversation now runs eligibility → final-sale explanation → size question →
+*"Your exchange for the Oxford Shirt (SKU TR-SHR-009) to size L has been
+created."*
 
 **A conversation harness as a separate layer from the unit tests.** The unit
 suite covers date arithmetic, the citation guard, the ownership check — things

@@ -95,6 +95,9 @@ def test_an_exchange_asks_for_a_size_then_stages_it(client, routes, scripted_age
     assert first["escalated"] is False
     assert "which size" in first["response"].lower()
     assert "raised" not in first["response"].lower()
+    # The refusal records what is outstanding, which is what tells the router
+    # next turn that a bare "size L please" is an answer, not a new request.
+    assert "size" in (main.store.get("flow-2").pending_question or "")
 
     second = say(client, "flow-2", "size L please")
     assert second["escalated"] is False
@@ -140,3 +143,18 @@ def test_an_ineligible_item_is_explained_and_nothing_is_staged(client, routes, s
     # The tool was called and refused; the session records the attempt.
     state = main.store.get("flow-4")
     assert "return_raised" in state.checks_performed
+
+
+def test_staging_the_exchange_clears_the_pending_question(client, routes, scripted_agent):
+    """Once the size arrives and the exchange is staged, nothing is outstanding."""
+    routes["exchange the shirt from TR-4528 in size L"] = eligibility("TR-4528")
+    scripted_agent([
+        _message(tool_calls=[_tool_call("raise_return_request", {
+            "order_id": "TR-4528", "item_sku": SHIRT,
+            "resolution": "exchange", "requested_size": "L"})]),
+        _message(content="Booked — the size exchange for your Oxford Shirt in L is raised."),
+    ])
+
+    say(client, "flow-5", "exchange the shirt from TR-4528 in size L")
+
+    assert main.store.get("flow-5").pending_question is None

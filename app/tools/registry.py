@@ -247,8 +247,19 @@ def dispatch(state: ConversationState, name: str, arguments: dict) -> dict:
             requested_size=arguments.get("requested_size"),
         )
         state.record_check("return_raised")
-        if outcome.get("staged") and outcome.get("order_id"):
-            state.set_active_order(outcome["order_id"])
+        if outcome.get("staged"):
+            if outcome.get("order_id"):
+                state.set_active_order(outcome["order_id"])
+            state.set_pending_question(None)
+        elif outcome.get("needs_info"):
+            # The tool knows exactly what is missing, so record it as the
+            # question now outstanding. Next turn the router is told the
+            # assistant is waiting on an answer, which is what stops a bare
+            # "size L please" being read as a new, unclear request.
+            state.set_pending_question(
+                "the " + " and ".join(outcome["needs_info"]).replace("_", " ")
+                + " for this return"
+            )
         return outcome
 
     if name == "search_policy":
