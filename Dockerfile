@@ -28,6 +28,7 @@ RUN useradd --create-home --uid 10001 trendly
 
 COPY --chown=trendly:trendly app/ ./app/
 COPY --chown=trendly:trendly data/ ./data/
+COPY --chown=trendly:trendly static/ ./static/
 
 # No secrets in the image. app/config.py reads everything from the environment,
 # and .dockerignore excludes .env so a local one can never be baked in by

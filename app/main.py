@@ -9,8 +9,9 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
-from app.config import get_settings, today
+from app.config import REPO_ROOT, get_settings, today
 from app.retrieval.index import get_index
 from app.router import agent_loop, fast_path
 from app.router.intent_gate import classify
@@ -71,6 +72,17 @@ LOST_PARCEL = (
 
 # Statuses whose correct answer depends on policy, so tier 2 declines them.
 POLICY_DEPENDENT_STATUSES = {"delayed", "lost_in_transit"}
+
+
+DEMO_PAGE = REPO_ROOT / "static" / "index.html"
+
+
+@app.get("/", include_in_schema=False)
+def demo() -> FileResponse:
+    """The demo chat page. A single static file, served as one route rather
+    than a StaticFiles mount -- there is exactly one asset, and a mount at /
+    would shadow the API routes below."""
+    return FileResponse(DEMO_PAGE, media_type="text/html")
 
 
 @app.get("/health")
