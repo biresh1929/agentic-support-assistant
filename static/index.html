@@ -15,6 +15,7 @@
     --faint:#A9A395;
     --line:rgba(43,46,61,.09);
     --periwinkle:#8E99C0;
+    --peri-tint:rgba(142,153,192,.16);
     --amber:#C2703F;
     --amber-tint:#F8EFE6;
     --shadow-sm:0 1px 2px rgba(43,46,61,.05), 0 2px 8px rgba(43,46,61,.04);
@@ -26,7 +27,6 @@
   body{
     margin:0;
     background:var(--cream);
-    /* two very soft warm blooms so the flat cream has some depth behind the card */
     background-image:
       radial-gradient(60rem 40rem at 15% -10%, rgba(142,153,192,.10), transparent 60%),
       radial-gradient(50rem 36rem at 95% 110%, rgba(194,112,63,.07), transparent 60%);
@@ -45,7 +45,7 @@
 
   /* ---------------- shell ---------------- */
   .shell{
-    width:100%; max-width:660px; height:min(86vh,820px);
+    width:100%; max-width:660px; height:min(88vh,860px);
     display:flex; flex-direction:column;
     background:rgba(253,251,247,.82);
     backdrop-filter:blur(20px) saturate(120%);
@@ -58,7 +58,7 @@
 
   header{
     display:flex; align-items:center; justify-content:space-between; gap:1rem;
-    padding:1.15rem 1.5rem; border-bottom:1px solid var(--line); flex:none;
+    padding:1.15rem 1.5rem .95rem; flex:none;
   }
   .brand{display:flex; align-items:center; gap:.7rem}
   .mark{
@@ -69,22 +69,50 @@
     color:#F5F1EA; font-size:.72rem; font-weight:700; letter-spacing:.02em;
   }
   .brand h1{margin:0; font-size:.95rem; font-weight:600; letter-spacing:-.01em; line-height:1.2}
-  .session{text-align:right; line-height:1.3}
+  .session{text-align:right; line-height:1.3; display:flex; flex-direction:column; align-items:flex-end; gap:.28rem}
   .session code{
     display:block; font-size:.68rem; color:var(--muted);
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
   }
+  /* identity badge: browsing (soft) -> bound (solid) */
+  .badge{
+    display:none; align-items:center; gap:.34rem;
+    font-size:.66rem; font-weight:600; letter-spacing:.02em;
+    padding:.2rem .55rem; border-radius:999px; white-space:nowrap;
+    background:var(--peri-tint); color:#4A5478;
+  }
+  .badge.on{display:inline-flex}
+  .badge.bound{background:var(--ink); color:#F3F0EA}
+  .badge .dot{width:5px; height:5px; border-radius:50%; background:currentColor; opacity:.6}
+  .badge.bound .dot{opacity:1}
+
+  /* ---------------- customer picker ---------------- */
+  .picker{
+    flex:none; padding:0 1.5rem 1rem; border-bottom:1px solid var(--line);
+  }
+  .picker .who{display:flex; flex-wrap:wrap; gap:.4rem; margin:.4rem 0 .55rem}
+  .picker .who button{
+    font:inherit; font-size:.8rem; color:var(--ink-soft);
+    background:rgba(255,255,255,.72); border:1px solid var(--line);
+    padding:.34rem .75rem; border-radius:999px; cursor:pointer;
+    transition:background .16s ease, color .16s ease, border-color .16s ease, transform .16s ease;
+  }
+  .picker .who button:hover{background:#fff; transform:translateY(-1px)}
+  .picker .who button[aria-pressed="true"]{
+    background:var(--ink); color:#F3F0EA; border-color:var(--ink);
+  }
+  .disclaimer{margin:0; font-size:.72rem; line-height:1.5; color:var(--muted); max-width:58ch}
 
   /* ---------------- stream ---------------- */
   .stream{
-    flex:1; overflow-y:auto; padding:1.5rem;
+    flex:1; overflow-y:auto; padding:1.4rem 1.5rem;
     display:flex; flex-direction:column; gap:1.15rem;
     scroll-behavior:smooth;
   }
   .stream::-webkit-scrollbar{width:9px}
   .stream::-webkit-scrollbar-thumb{background:rgba(43,46,61,.13); border-radius:9px; border:3px solid transparent; background-clip:content-box}
 
-  .intro{text-align:center; margin:auto 0; padding:1rem 0}
+  .intro{text-align:center; margin:auto 0; padding:.5rem 0}
   .intro p{margin:.5rem auto 0; max-width:34ch; color:var(--muted); font-size:.9rem}
   .intro .ring{
     width:52px; height:52px; margin:0 auto 1rem; border-radius:50%;
@@ -92,7 +120,7 @@
     box-shadow:0 0 0 7px rgba(142,153,192,.09), 0 0 0 14px rgba(142,153,192,.05);
   }
 
-  .starters{display:flex; flex-wrap:wrap; gap:.45rem; justify-content:center; margin-top:1.4rem}
+  .starters{display:flex; flex-wrap:wrap; gap:.45rem; justify-content:center; margin-top:1.3rem}
   .starters button{
     font:inherit; font-size:.8rem; color:var(--ink-soft);
     background:rgba(255,255,255,.75); border:1px solid var(--line);
@@ -100,6 +128,7 @@
     transition:transform .16s ease, box-shadow .16s ease, background .16s ease;
   }
   .starters button:hover{background:#fff; box-shadow:var(--shadow-sm); transform:translateY(-1px)}
+  .starters button small{display:block; font-size:.66rem; color:var(--faint); letter-spacing:.02em}
 
   /* ---------------- messages ---------------- */
   .row{display:flex; flex-direction:column; max-width:82%; animation:rise .34s cubic-bezier(.2,.7,.3,1) both}
@@ -112,17 +141,13 @@
     padding:.72rem 1rem; border-radius:16px;
     box-shadow:var(--shadow-sm); white-space:pre-wrap; word-wrap:break-word;
   }
-  .me .bubble{
-    background:var(--ink); color:#F6F3EE;
-    border-bottom-right-radius:5px;
-  }
+  .me .bubble{background:var(--ink); color:#F6F3EE; border-bottom-right-radius:5px}
   .bot .bubble{
     background:var(--card); color:var(--ink);
     border:1px solid var(--line); border-bottom-left-radius:5px;
   }
   .bubble strong{font-weight:650}
 
-  /* escalation: warm accent, not alarm */
   .row.esc .bubble{
     border-left:3px solid var(--amber);
     background:linear-gradient(90deg,var(--amber-tint),var(--card) 22%);
@@ -131,7 +156,7 @@
   .meta{display:flex; flex-wrap:wrap; align-items:center; gap:.32rem; margin-top:.45rem; padding:0 .15rem}
   .tool{
     font-size:.66rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-    color:#5F678C; background:rgba(142,153,192,.16);
+    color:#5F678C; background:var(--peri-tint);
     padding:.14rem .46rem; border-radius:5px; letter-spacing:.01em;
   }
   .lat{font-size:.66rem; color:var(--faint); font-variant-numeric:tabular-nums; margin-left:.15rem}
@@ -157,10 +182,7 @@
     animation:breathe 2.1s ease-out infinite;
   }
   .breath span:nth-child(2){animation-delay:.7s}
-  @keyframes breathe{
-    0%{transform:scale(.3); opacity:.85}
-    100%{transform:scale(1); opacity:0}
-  }
+  @keyframes breathe{0%{transform:scale(.3); opacity:.85} 100%{transform:scale(1); opacity:0}}
   .thinking em{font-style:normal; font-size:.625rem; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--faint)}
   @media (prefers-reduced-motion:reduce){ .breath span{animation-duration:0s; opacity:.3} }
 
@@ -192,6 +214,7 @@
     body{padding:0}
     .shell{height:100vh; max-width:none; border-radius:0; border:none}
     .row{max-width:90%}
+    .session{gap:.2rem}
   }
 </style>
 </head>
@@ -207,22 +230,31 @@
       </div>
     </div>
     <div class="session">
-      <div class="eyebrow">Session</div>
-      <code id="sid">&mdash;</code>
+      <div id="badge" class="badge"><span class="dot"></span><span id="badgetext"></span></div>
+      <div>
+        <div class="eyebrow">Session</div>
+        <code id="sid">&mdash;</code>
+      </div>
     </div>
   </header>
+
+  <div class="picker">
+    <div class="eyebrow">Browse as</div>
+    <div class="who" id="who"></div>
+    <p class="disclaimer">
+      Demo convenience, not real login &mdash; picking a customer just sets which
+      orders you&rsquo;ll see below. The session actually binds to whichever order
+      gets looked up first, exactly as it would for a real customer with no auth
+      in front of this endpoint.
+    </p>
+  </div>
 
   <div class="stream" id="stream">
     <div class="intro" id="intro">
       <div class="ring"></div>
       <div class="eyebrow">Orders &middot; shipping &middot; returns</div>
       <p>Ask about an order, or start a return. Try one of these.</p>
-      <div class="starters" id="starters">
-        <button type="button" data-q="Where is my order TR-4521?">Track TR-4521</button>
-        <button type="button" data-q="Can I return the kurta from TR-4530?">Return TR-4530</button>
-        <button type="button" data-q="Can I return the pearl earrings from TR-4527?">Earrings TR-4527</button>
-        <button type="button" data-q="Where is my order TR-4526?">Lost parcel TR-4526</button>
-      </div>
+      <div class="starters" id="starters"></div>
     </div>
   </div>
 
@@ -236,21 +268,120 @@
 (function () {
   "use strict";
 
-  var stream   = document.getElementById("stream");
-  var intro    = document.getElementById("intro");
-  var composer = document.getElementById("composer");
-  var input    = document.getElementById("input");
-  var send     = document.getElementById("send");
+  // Customers and their orders, taken from data/orders.json. This is display
+  // data only -- nothing here is sent to the server, and picking a name does
+  // not authenticate anyone. The session binds server-side to whichever order
+  // is successfully looked up first, which is the behaviour being shown.
+  var CUSTOMERS = [
+    { id: "C-100", name: "Ananya Rao", orders: [
+      { id: "TR-4521", note: "in transit",       q: "Where is my order TR-4521?" },
+      { id: "TR-4524", note: "part-shipped",     q: "What's the status of TR-4524?" },
+      { id: "TR-4529", note: "cancelled",        q: "What happened to TR-4529?" }
+    ]},
+    { id: "C-101", name: "Marcus Bell", orders: [
+      { id: "TR-4530", note: "returnable",       q: "Can I return the kurta from TR-4530?" },
+      { id: "TR-4522", note: "mixed items",      q: "Can I return the cotton tee from TR-4522?" },
+      { id: "TR-4526", note: "lost parcel",      q: "Where is my order TR-4526?" }
+    ]},
+    { id: "C-102", name: "Priya Nair", orders: [
+      { id: "TR-4527", note: "jewellery",        q: "Can I return the pearl earrings from TR-4527?" },
+      { id: "TR-4523", note: "out of window",    q: "Can I return the bomber jacket from TR-4523?" }
+    ]},
+    { id: "C-103", name: "Diego Ramos", orders: [
+      { id: "TR-4528", note: "final sale",       q: "Can I return the Oxford shirt from TR-4528?" },
+      { id: "TR-4525", note: "delayed",          q: "Where is my order TR-4525?" }
+    ]}
+  ];
 
-  // One session for the lifetime of the page, so the server can keep context.
-  var sessionId = (function () {
+  // The default chip set, used before anyone picks a customer. Deliberately
+  // mixed, which is how the page behaved before the picker existed.
+  var DEFAULT_STARTERS = [
+    { id: "TR-4521", note: "in transit",   q: "Where is my order TR-4521?" },
+    { id: "TR-4530", note: "returnable",   q: "Can I return the kurta from TR-4530?" },
+    { id: "TR-4527", note: "jewellery",    q: "Can I return the pearl earrings from TR-4527?" },
+    { id: "TR-4526", note: "lost parcel",  q: "Where is my order TR-4526?" }
+  ];
+
+  var stream    = document.getElementById("stream");
+  var intro     = document.getElementById("intro");
+  var starters  = document.getElementById("starters");
+  var who       = document.getElementById("who");
+  var badge     = document.getElementById("badge");
+  var badgeText = document.getElementById("badgetext");
+  var sidEl     = document.getElementById("sid");
+  var composer  = document.getElementById("composer");
+  var input     = document.getElementById("input");
+  var send      = document.getElementById("send");
+
+  var sessionId = null;
+  var current   = null;    // the picked customer, or null
+  var bound     = false;   // has a tool call actually landed on this session
+
+  function newSessionId() {
     try {
       if (window.crypto && crypto.randomUUID) return "web-" + crypto.randomUUID();
     } catch (e) { /* fall through */ }
     return "web-" + Date.now().toString(36) + "-" +
            Math.random().toString(36).slice(2, 10);
-  })();
-  document.getElementById("sid").textContent = sessionId.slice(0, 16) + "…";
+  }
+
+  function resetSession() {
+    sessionId = newSessionId();
+    bound = false;
+    sidEl.textContent = sessionId.slice(0, 16) + "…";
+    paintBadge();
+  }
+
+  function paintBadge() {
+    if (!current) { badge.className = "badge"; badgeText.textContent = ""; return; }
+    // "Browsing as" is the picker's claim. It becomes "Bound as" only once the
+    // server has actually run a tool on this session -- that is the moment
+    // identity is really established, and it is the whole point of the demo.
+    badge.className = "badge on" + (bound ? " bound" : "");
+    badgeText.textContent = (bound ? "Bound as " : "Browsing as ") + current.name;
+  }
+
+  function renderStarters(list) {
+    starters.textContent = "";
+    list.forEach(function (o) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("data-q", o.q);
+      b.appendChild(document.createTextNode(o.id));
+      var s = document.createElement("small");
+      s.textContent = o.note;
+      b.appendChild(s);
+      starters.appendChild(b);
+    });
+  }
+
+  function clearConversation() {
+    stream.textContent = "";
+    stream.appendChild(intro);
+  }
+
+  function selectCustomer(cust) {
+    current = cust;
+    // A fresh session every time, so a session bound to the previous customer
+    // is never carried across. This is the confusion the picker exists to fix.
+    resetSession();
+    clearConversation();
+    renderStarters(cust.orders);
+    Array.prototype.forEach.call(who.children, function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-cid") === cust.id));
+    });
+    input.focus();
+  }
+
+  CUSTOMERS.forEach(function (c) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = c.name;
+    b.setAttribute("data-cid", c.id);
+    b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", function () { selectCustomer(c); });
+    who.appendChild(b);
+  });
 
   // Replies are model output. Escape first, then allow only **bold**, so the
   // markdown the model likes to emit reads properly without opening an
@@ -266,16 +397,16 @@
 
   function scrollDown() { stream.scrollTop = stream.scrollHeight; }
 
-  function addMessage(who, text, opts) {
+  function addMessage(whoCls, text, opts) {
     opts = opts || {};
     if (intro && intro.parentNode) intro.remove();
 
     var row = document.createElement("div");
-    row.className = "row " + who + (opts.escalated ? " esc" : "") + (opts.error ? " err" : "");
+    row.className = "row " + whoCls + (opts.escalated ? " esc" : "") + (opts.error ? " err" : "");
 
     var bubble = document.createElement("div");
     bubble.className = "bubble";
-    if (who === "bot" && !opts.error) bubble.innerHTML = format(text);
+    if (whoCls === "bot" && !opts.error) bubble.innerHTML = format(text);
     else bubble.textContent = text;
     row.appendChild(bubble);
 
@@ -332,8 +463,8 @@
     var waiting = showThinking();
     var started = Date.now();
 
-    // Generous: a cold Render dyno plus a multi-tool turn can genuinely run
-    // past a minute. The breathing indicator is what keeps that readable.
+    // Generous: a cold container plus a multi-tool turn can genuinely run past
+    // a minute. The breathing indicator is what keeps that readable.
     var abort = new AbortController();
     var timer = setTimeout(function () { abort.abort(); }, 180000);
 
@@ -356,8 +487,13 @@
         throw new Error("The server sent a response this page could not read.");
       }
 
+      var tools = body.tools_called || [];
+      // The first turn that actually ran a tool is the turn the server bound
+      // this session on. Read from the reply we already have -- no extra call.
+      if (!bound && tools.length) { bound = true; paintBadge(); }
+
       addMessage("bot", body.response, {
-        tools: body.tools_called || [],
+        tools: tools,
         escalated: !!body.escalated,
         reason: body.escalation_reason,
         seconds: ((Date.now() - started) / 1000).toFixed(1)
@@ -383,11 +519,15 @@
     ask(text);
   });
 
-  document.getElementById("starters").addEventListener("click", function (e) {
+  starters.addEventListener("click", function (e) {
     var btn = e.target.closest("button[data-q]");
     if (btn) ask(btn.getAttribute("data-q"));
   });
 
+  // Default state: no customer picked, mixed chips, no badge -- exactly how
+  // the page behaved before the picker existed.
+  resetSession();
+  renderStarters(DEFAULT_STARTERS);
   input.focus();
 })();
 </script>
