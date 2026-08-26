@@ -181,3 +181,50 @@ def test_an_unknown_session_id_shape_is_still_accepted(client, routes):
     body = say(client, "../../etc/passwd", "asdkjhaskjdh")
     assert body["session_id"] == "../../etc/passwd"
     assert body["response"].strip()
+
+
+# --------------------------------------------------------------------------
+# The intent gate failing closed -- not theoretical, this happened for real
+# --------------------------------------------------------------------------
+
+def test_a_failing_intent_gate_degrades_to_ambiguous(client, monkeypatch):
+    """Regression: during a Groq outage every classification call raised.
+
+    classify() catches everything and routes to `ambiguous`, which asks a
+    question rather than guessing. The alternative -- letting the exception
+    propagate -- would turn an upstream outage into a 500, and guessing an
+    intent would answer confidently from a half-built context.
+    """
+    from app.router import intent_gate
+
+    # Patch the client the real classify() uses, not classify itself --
+    # replacing the function would bypass the very try/except being tested.
+    def explode():
+        raise RuntimeError("groq is down")
+
+    monkeypatch.setattr(intent_gate, "get_client", explode)
+
+    body = client.post(
+        "/chat", json={"session_id": "gate-down", "message": "where is my order?"}
+    )
+
+    assert body.status_code == 200, "an upstream outage must not become a 500"
+    payload = body.json()
+    assert payload["escalated"] is False      # first vague turn asks, never escalates
+    assert "?" in payload["response"]
+    assert payload["session_id"] == "gate-down"
+
+
+def test_the_real_classifier_catches_its_own_failures(monkeypatch):
+    """The same property at the unit level, on classify() itself."""
+    from app.router import intent_gate
+    from app.state.conversation_state import ConversationState
+
+    monkeypatch.setattr(intent_gate, "get_client",
+                        lambda: (_ for _ in ()).throw(RuntimeError("groq is down")))
+
+    routing = intent_gate.classify("where is my order?", ConversationState(session_id="s"))
+
+    assert routing.intent == "ambiguous"
+    assert routing.confidence == 0.0
+    assert routing.order_id is None

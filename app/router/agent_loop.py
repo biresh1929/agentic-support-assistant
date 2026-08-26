@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from openai import BadRequestError
+
 from app.config import get_settings
 from app.guardrails.citation_guard import correction_prompt, verify
 from app.llm import get_client
@@ -104,6 +106,56 @@ ELIGIBILITY_CORRECTION = (
 )
 
 
+def _recovered_text(exc: Exception) -> Optional[str]:
+    """The model's own answer, salvaged when Groq rejected the request.
+
+    A forced tool_choice makes Groq reject the whole completion if the model
+    will not comply -- either because it called a different tool, or because it
+    declined to call one at all. Both come back as 400 tool_use_failed, and
+    both carry what the model actually wanted to say in `failed_generation`.
+    Discarding that turns a model that answered sensibly into a
+    model_call_failed escalation, which is a worse answer than the one already
+    written.
+
+    Returns prose only. When the model called the wrong tool, failed_generation
+    is the serialised tool call rather than something a customer should read,
+    so anything that parses as a tool-call object is rejected here. Whatever
+    survives is still put through the citation guard by the caller -- recovered
+    text is treated as an ordinary answer, never trusted because of where it
+    came from.
+    """
+    if not isinstance(exc, BadRequestError):
+        return None
+
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return None
+    # openai 2.x hands back the unwrapped error object; be tolerant of a
+    # nested shape in case that changes.
+    payload = body.get("error") if isinstance(body.get("error"), dict) else body
+
+    code = getattr(exc, "code", None) or payload.get("code")
+    if code != "tool_use_failed":
+        return None
+
+    text = payload.get("failed_generation")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    text = text.strip()
+
+    # A serialised tool call is not an answer.
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict) and ("name" in parsed or "arguments" in parsed):
+            return None
+        return None
+
+    return text
+
+
 def _assistant_turn(message: Any) -> dict:
     """Serialise an assistant message with tool calls back into the transcript."""
     return {
@@ -164,10 +216,35 @@ def run(message: str, state: ConversationState) -> AgentResult:
                 tool_choice=tool_choice,
                 messages=messages,
             )
-        except Exception:
-            logger.exception("agent loop model call failed")
-            state.escalate("model_call_failed")
-            return AgentResult(text=ERROR_MESSAGE, escalated=True, hit_cap=False)
+        except Exception as exc:
+            recovered = _recovered_text(exc)
+            if recovered is None:
+                # Genuinely unexpected. Fail closed, exactly as before.
+                logger.exception("agent loop model call failed")
+                state.escalate("model_call_failed")
+                return AgentResult(text=ERROR_MESSAGE, escalated=True, hit_cap=False)
+
+            logger.warning(
+                "session=%s recovered a rejected completion (%s chars) and is "
+                "grounding it as an ordinary answer", state.session_id, len(recovered),
+            )
+            # Terminal by construction. Forcing already failed once this turn,
+            # so the loop does not re-enter the bypass check or force again --
+            # that would risk the same rejection a second time.
+            if verify(recovered, result.retrieved_chunks, result.evidence).ok:
+                result.text = recovered
+                result.escalated = state.turn_escalation_reason is not None
+                return result
+
+            # Ungrounded, so treat it as a verification failure rather than a
+            # system failure -- the model answered, the answer just cannot be
+            # stood behind.
+            state.escalate("unverified_claim")
+            state.record_check("escalation_staged")
+            result.text = UNGROUNDED_MESSAGE
+            result.escalated = True
+            result.guard_failed = True
+            return result
 
         tool_choice = "auto"
         reply = completion.choices[0].message

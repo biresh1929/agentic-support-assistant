@@ -575,6 +575,42 @@ deterministic, side-effect-free and needs no model call, its `reasons` field
 answers a "why" follow-up directly, and remembering an earlier call would go
 stale the moment a correction changed which order is under discussion.
 
+**Forcing a tool call is a narrow, known risk surface, and it is mitigated
+rather than eliminated.** There are exactly two sites where `tool_choice` is
+not `"auto"`: the first model call of an `eligibility_check` turn, and the
+retry after a bypass. Both were probed adversarially with real API calls, and
+both produced real failures before they produced confidence.
+
+Groq rejects the entire completion with `400 tool_use_failed` whenever the
+model will not honour a forced choice, and it does so in two distinct ways.
+Naming a specific function fails when the model calls a *different* one --
+observed live on a cross-customer question, where reaching for
+`escalate_to_human` was the sensible move and the constraint was wrong. Using
+the generic `"required"` fails when the model calls *no* tool at all --
+observed on an eligibility question about an order that does not exist, where
+"I can't locate that order" is the correct answer and no tool can produce it.
+Both share a shape: a terminal state where there is genuinely nothing left to
+derive, and forcing an action the model correctly declines to take.
+
+The mitigation is layered rather than a claim that the failure mode is gone.
+An ownership refusal exempts the turn from the guard entirely. A rejected
+completion has its `failed_generation` recovered and put through the citation
+guard like any other answer, so the model's own sensible text is used instead
+of being discarded. And underneath both, the generic handler still catches
+anything unrecognised and escalates cleanly. **The honest position is that
+another trigger for this class probably exists** -- the untested combinations
+below are the likely candidates -- **and that the system degrades to a clean
+handoff rather than a crash or a 500 when it fires.** That is a property worth
+claiming; "we found them all" is not.
+
+Three paths were identified as untested and deliberately left that way, given
+diminishing returns this close to submission: the iteration cap
+(`max_tool_iterations` exhausted without an answer), unparseable tool
+arguments, and dispatch of an unknown tool name. All three are lower risk than
+the forced-choice surface -- the last two are near-unreachable without a schema
+drift or a malformed model response, and the first is a plain escalation path
+with no interaction with any guard. Named here rather than left silent.
+
 **The retry had to be forced, not requested.** The first version of this
 appended the correction and let the loop run on with `tool_choice="auto"`,
 which meant the model spent a whole reasoning round deciding whether to comply

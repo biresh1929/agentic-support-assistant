@@ -288,3 +288,123 @@ def test_the_guard_still_fires_when_there_was_no_ownership_refusal(scripted_llm)
 
     assert result.ownership_refused is False
     assert result.eligibility_retried is True
+
+
+# ------------------ recovering a rejected completion ------------------
+
+def _tool_use_failed(text):
+    """A BadRequestError shaped exactly like the one Groq returns.
+
+    Verified against openai 2.33.0: `.body` is the unwrapped error object, not
+    nested under "error", and `.code` is populated from it.
+    """
+    import httpx
+    from openai import BadRequestError
+
+    return BadRequestError(
+        "400",
+        response=httpx.Response(
+            400, request=httpx.Request("POST", "https://api.groq.com/v1/chat")),
+        body={"message": "Tool choice is required, but model did not call a tool",
+              "type": "invalid_request_error", "code": "tool_use_failed",
+              "failed_generation": text},
+    )
+
+
+def _llm_raising_on(monkeypatch, replies, raise_at, exc):
+    """Scripted replies, but call number `raise_at` (0-based) raises instead."""
+    calls = {"n": 0}
+
+    def create(**_kwargs):
+        i = calls["n"]; calls["n"] += 1
+        if i == raise_at:
+            raise exc
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=replies[min(i, len(replies) - 1)])])
+
+    monkeypatch.setattr(
+        agent_loop, "get_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))))
+    return calls
+
+
+NOT_FOUND_LOOKUP = _message(
+    tool_calls=[_tool_call("get_order_status", {"order_id": "TR-9999"})]
+)
+
+
+def test_a_rejected_completion_is_recovered_and_used_when_grounded(monkeypatch):
+    """The order-not-found case, which produced this live.
+
+    TR-9999 does not exist, so there is no eligibility to derive. The model
+    said so in plain text, the bypass guard forced a retry, the model still
+    would not call a tool, and Groq rejected the whole completion -- throwing
+    away a perfectly good answer and escalating as model_call_failed instead.
+    """
+    state = _eligibility_state("recov-1")
+    calls = _llm_raising_on(
+        monkeypatch,
+        [NOT_FOUND_LOOKUP,
+         _message(content="I can't locate an order with the ID TR-9999.")],
+        raise_at=2,   # 0 lookup, 1 bare answer -> guard forces, 2 rejected
+        exc=_tool_use_failed(
+            "I'm sorry, I can't locate an order with the ID TR-9999. "
+            "Could you double-check the number?"),
+    )
+
+    result = agent_loop.run("can I return the jacket from TR-9999?", state)
+
+    assert "can't locate an order" in result.text
+    assert result.escalated is False
+    assert state.escalation_reason != "model_call_failed"
+    assert result.eligibility_bypass_failed is False
+    assert calls["n"] == 3          # terminal: no fourth attempt
+
+
+def test_a_recovered_answer_that_fails_grounding_is_not_trusted(monkeypatch):
+    """Recovery is not a bypass. The salvaged text goes through the guard."""
+    state = _eligibility_state("recov-2")
+    _llm_raising_on(
+        monkeypatch,
+        [NOT_FOUND_LOOKUP, _message(content="No such order.")],
+        raise_at=2,
+        # An invented figure the policy does not define.
+        exc=_tool_use_failed("You can return it within 45 calendar days for a "
+                             "full refund of Rs 4,500."),
+    )
+
+    result = agent_loop.run("can I return the jacket from TR-9999?", state)
+
+    assert result.guard_failed is True
+    assert result.escalated is True
+    assert state.escalation_reason == "unverified_claim"
+    assert "45" not in result.text and "4,500" not in result.text
+
+
+def test_an_unrelated_api_error_still_fails_closed(monkeypatch):
+    """The fail-closed default is untouched for genuinely unexpected errors."""
+    state = _eligibility_state("recov-3")
+    _llm_raising_on(monkeypatch, [NOT_FOUND_LOOKUP], raise_at=0,
+                    exc=RuntimeError("connection reset"))
+
+    result = agent_loop.run("can I return the jacket from TR-9999?", state)
+
+    assert state.escalation_reason == "model_call_failed"
+    assert result.escalated is True
+    assert result.text == agent_loop.ERROR_MESSAGE
+
+
+def test_a_rejected_tool_call_payload_is_never_shown_to_a_customer(monkeypatch):
+    """The other rejection shape carries a serialised tool call, not prose."""
+    state = _eligibility_state("recov-4")
+    _llm_raising_on(
+        monkeypatch, [NOT_FOUND_LOOKUP], raise_at=1,
+        exc=_tool_use_failed(
+            '{"name": "escalate_to_human", "arguments": {"reason": "suspected_fraud"}}'),
+    )
+
+    result = agent_loop.run("can I return the jacket from TR-9999?", state)
+
+    assert "escalate_to_human" not in result.text
+    assert "{" not in result.text
+    assert state.escalation_reason == "model_call_failed"   # fell through, as it should
