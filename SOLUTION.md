@@ -256,6 +256,17 @@ observed transcript has the assistant disclosing another customer's order on
 turn 2 and then refusing the customer's *own* order on turn 4. Every individual
 call behaved exactly as its unit tests said it should.
 
+Before asking anything, I need to know who's actually answering -- a
+VP of customer ops, a head of support, a CTO, hears the same
+question differently, and wants a different thing out of the
+answer. Everyone in the room wants a long feature list, but each
+person wants their own slice of it: ops wants speed, security wants
+approval gates, support wants the routine cases actually handled.
+So the first move isn't a question at all -- it's restating the
+problem back without picking a technology yet, then asking what
+this system should *never* be allowed to expose. That's the
+question underneath most of the ones below.
+
 ## Five questions for Trendly's ops team
 
 **1. How often does the policy document actually change, and do answers given
@@ -331,6 +342,12 @@ actually made. Two things needed: which source wins, and whether *"I received
 it later than you think"* is itself an escalation category. It is not one now,
 and the assistant handles it by offering a human, which is a reasonable
 accident rather than a design.
+
+However these land, I'd want to validate cheaply, not guess big.
+Ship the smallest, highest-conviction piece first, take a CSAT
+baseline before it goes live, and check automation rate and CSAT
+again after -- if CSAT hasn't dropped, that's the signal to expand
+scope, not a demo.
 
 ## Cost and latency
 

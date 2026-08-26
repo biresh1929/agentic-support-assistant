@@ -196,6 +196,45 @@ typing was not.
 - Test writing, docstrings, and these documents — drafted from the decisions
   and the evidence above, then reviewed and corrected by me.
 
+**A note on how I actually think about this.** I believe AI should
+be used as an assistant, not a crutch -- if you're nothing without
+it, you probably didn't need it in the first place. The person who
+gets the most out of AI is the one who could still do the job
+without it, just slower.
+
+One trick I use to catch hallucination: I tell Claude Code, in its
+own instructions, to open every session with "Hello, Biresh" -- a
+canary. If that greeting is ever missing or off, something upstream
+broke and I stop trusting the output until I've checked. I have a
+few habits like this; it's less a trick and more how I work as
+someone who builds AI-native, not someone who just happens to use
+AI.
+
+I also came in with a design instinct AI didn't give me. Before
+touching this assignment, I already knew the first move is figuring
+out who I'm actually talking to and what problem they're really
+describing -- not the one they stated. That's from being an AI/ML
+intern before this, where the lesson that stuck was: listening
+and earning trust matters more than technical output, and the real
+problem is rarely the one you're told at the start.
+
+Where I used AI and where I didn't: I used AI for implementation,
+debugging, and drafting docs. Not for deciding the architecture, and
+not for deciding when something was done. I care about quality
+versus completeness -- a first version has to work and be complete
+before it gets polished, and left alone AI will happily
+over-engineer past that line. I stayed the one deciding when to
+stop.
+
+AI also can't take ownership, and this role demands full ownership
+from discovery through delivery -- that's not something a tool can
+carry. Same with compliance, data leakage, and auditability:
+those calls were mine, not something a model flagged for me. I
+designed the tests with AI's help, but I'm the one who checked
+whether they were actually good, not just present.
+
+So yes, I used AI throughout. But I also thoruoghly checked  -- that's the difference this should show.
+
 Where this document states a measured number, it was measured in this repo.
 Two claims that could have been asserted are deliberately absent because they
 could not be: there is no retrieval evaluation backing the embedding choice,
