@@ -41,6 +41,11 @@ class AgentResult:
     # conflating them would make neither diagnosable.
     eligibility_retried: bool = False
     eligibility_bypass_failed: bool = False
+    # Set when a tool this turn refused an order as belonging to someone else.
+    # An eligibility question about another customer's order has no eligibility
+    # to check, so a refusal without check_return_eligibility is the correct
+    # ending rather than a bypass.
+    ownership_refused: bool = False
 
 
 UNGROUNDED_MESSAGE = (
@@ -72,15 +77,23 @@ ELIGIBILITY_BYPASS_MESSAGE = (
 # already derived.
 ELIGIBILITY_DERIVING_TOOLS = {"check_return_eligibility", "raise_return_request"}
 
-# Used for exactly one call: the retry after an eligibility bypass. Everywhere
-# else the loop runs tool_choice="auto", because the model has to decide what
-# to reach for. Here it does not -- we already know which tool was skipped, and
-# letting it reason about that again cost a full round trip. See the
-# eligibility section of SOLUTION.md for the measured difference.
-FORCE_ELIGIBILITY_TOOL = {
-    "type": "function",
-    "function": {"name": "check_return_eligibility"},
-}
+# "required" means the model must call some tool, without naming which. Used
+# in two places: the first call of an eligibility turn, and the retry after a
+# bypass.
+#
+# It is deliberately NOT a single named function. Forcing
+# check_return_eligibility by name is what produced this, live:
+#
+#   400 tool_use_failed -- attempted to call tool 'escalate_to_human' which
+#   does not match request.tool_choice: 'check_return_eligibility'
+#
+# The model was right and the constraint was wrong. Asked about an order
+# belonging to someone else, reaching for escalate_to_human is the sensible
+# move, and Groq hard-fails the request rather than falling back when the call
+# does not match a named tool_choice. "required" keeps the property that
+# actually mattered -- the model must act rather than answer from its own
+# reasoning -- without dictating the move.
+FORCE_ANY_TOOL = "required"
 ELIGIBILITY_CORRECTION = (
     "You answered a return eligibility question without calling "
     "check_return_eligibility. Eligibility depends on date arithmetic, category "
@@ -130,10 +143,17 @@ def run(message: str, state: ConversationState) -> AgentResult:
             },
         )
 
-    # "auto" for every call except the one immediately after an eligibility
-    # bypass, which forces the skipped tool. Reset after each use so the
-    # forcing lasts exactly one call and the loop returns to reasoning freely.
-    tool_choice: Any = "auto"
+    # An eligibility turn must act before it answers. Leaving the first call
+    # on "auto" let the model produce a bare text answer -- sometimes a
+    # hallucinated verdict, sometimes a perfectly correct cross-customer
+    # refusal -- and the bypass guard cannot tell those apart, because both
+    # look like zero eligibility tools and a final answer. Forcing a tool call
+    # up front means the refusal comes from _check_ownership's real guidance
+    # rather than from the model guessing, so the two stop being
+    # indistinguishable. Every other turn starts on "auto".
+    tool_choice: Any = (
+        FORCE_ANY_TOOL if state.intent == "eligibility_check" else "auto"
+    )
 
     for iteration in range(settings.max_tool_iterations):
         try:
@@ -172,8 +192,15 @@ def run(message: str, state: ConversationState) -> AgentResult:
                 # side-effect-free and needs no model call, and remembering an
                 # earlier call would go stale the moment a correction changed
                 # which order is under discussion.
+                # An ownership refusal ends the question: there is no
+                # eligibility to derive on an order that is not the customer's,
+                # so not calling check_return_eligibility is correct here
+                # rather than a bypass. Without this the guard fires on a
+                # refusal that was already right, and the forced retry then
+                # collides with a model that has no valid tool to call.
                 bypassed = (
                     state.intent == "eligibility_check"
+                    and not result.ownership_refused
                     and not ELIGIBILITY_DERIVING_TOOLS.intersection(result.tools_used)
                 )
                 if not bypassed:
@@ -209,10 +236,12 @@ def run(message: str, state: ConversationState) -> AgentResult:
                 state.record_check("eligibility_bypass_retry")
                 messages.append({"role": "assistant", "content": answer})
                 messages.append({"role": "system", "content": ELIGIBILITY_CORRECTION})
-                # Force the call rather than asking for it. Asking cost a whole
-                # reasoning round -- enough, on two harness cases, to push the
-                # turn past its deadline entirely.
-                tool_choice = FORCE_ELIGIBILITY_TOOL
+                # Force a tool call rather than asking for one. Asking cost a
+                # whole reasoning round -- enough, on two harness cases, to
+                # push the turn past its deadline. Generic rather than named:
+                # naming check_return_eligibility here is what 400'd live when
+                # the model reached for escalate_to_human instead.
+                tool_choice = FORCE_ANY_TOOL
                 continue
 
             logger.warning(
@@ -251,6 +280,9 @@ def run(message: str, state: ConversationState) -> AgentResult:
                 arguments = {}
 
             outcome = dispatch(state, call.function.name, arguments)
+            if (isinstance(outcome, dict)
+                    and outcome.get("error") == "order does not belong to this customer"):
+                result.ownership_refused = True
             result.tool_calls_made += 1
             result.tools_used.append(call.function.name)
             result.evidence.append(json.dumps(outcome, ensure_ascii=False, default=str))

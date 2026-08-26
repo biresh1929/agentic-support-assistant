@@ -209,9 +209,13 @@ def test_the_bypass_retry_forces_the_tool_instead_of_asking(monkeypatch):
 
     assert result.eligibility_retried is True
     assert result.eligibility_bypass_failed is False
-    # Calls 1-3 reason freely; call 4 -- the one after the bypass -- is forced.
-    assert seen[:3] == ["auto", "auto", "auto"]
-    assert seen[3] == agent_loop.FORCE_ELIGIBILITY_TOOL
+    # An eligibility turn opens forced, so the model must act before it can
+    # answer; calls 2 and 3 reason freely; call 4 -- after the bypass -- is
+    # forced again. Generic, never a named function: naming one 400s when the
+    # model reaches for a different, legitimate tool.
+    assert seen[0] == agent_loop.FORCE_ANY_TOOL
+    assert seen[1:3] == ["auto", "auto"]
+    assert seen[3] == agent_loop.FORCE_ANY_TOOL
     # And the forcing is one-shot: the loop reasons freely again afterwards.
     assert seen[4] == "auto"
 
@@ -230,3 +234,57 @@ def test_the_citation_guard_retry_still_reasons_freely(monkeypatch):
 
     assert result.guard_retried is True
     assert all(choice == "auto" for choice in seen), seen
+
+
+def test_a_cross_customer_eligibility_turn_refuses_without_tripping_the_guard(
+    scripted_llm,
+):
+    """Regression for a live 400. Found on the deployed service.
+
+    A session bound to C-100 was asked an eligibility question about C-101's
+    order. The model answered with a correct-sounding refusal, and because no
+    eligibility tool had been called the bypass guard could not tell that from
+    a hallucinated verdict -- both are zero eligibility tools plus a final
+    answer. It forced a retry naming check_return_eligibility, the model
+    reached for escalate_to_human instead, which is the sensible move for
+    someone else's order, and Groq rejected the request outright:
+
+        400 tool_use_failed -- attempted to call tool 'escalate_to_human'
+        which does not match request.tool_choice: 'check_return_eligibility'
+
+    The customer saw a model_call_failed escalation rather than the ownership
+    refusal the system had already correctly derived.
+    """
+    state = _eligibility_state("xcust-1")
+    state.customer_id = "C-100"          # bound by an earlier TR-4521 lookup
+
+    calls = scripted_llm([
+        # TR-4530 belongs to C-101; dispatch refuses it and returns guidance.
+        _message(tool_calls=[_tool_call("get_order_status", {"order_id": "TR-4530"})]),
+        _message(content="I can only discuss orders on your own account, so I "
+                         "can't share anything about that one."),
+    ])
+
+    result = agent_loop.run("can I return the kurta from TR-4530?", state)
+
+    assert result.ownership_refused is True
+    # The guard must not fire: there is no eligibility to derive on an order
+    # that is not the customer's, so skipping the tool is correct here.
+    assert result.eligibility_retried is False
+    assert result.eligibility_bypass_failed is False
+    assert result.escalated is False
+    assert state.escalation_reason != "model_call_failed"
+    assert "own account" in result.text
+    assert calls["n"] == 2          # no forced retry, so no third call to 400 on
+    assert "cross_customer_lookup_refused" in state.checks_performed
+
+
+def test_the_guard_still_fires_when_there_was_no_ownership_refusal(scripted_llm):
+    """The exemption is narrow: an ordinary bypass is still caught."""
+    state = _eligibility_state("xcust-2")
+    scripted_llm([ORDER_LOOKUP, WINDOW_SEARCH, VERDICT, ELIGIBILITY_CALL, VERDICT])
+
+    result = agent_loop.run("can I return the kurta from TR-4530?", state)
+
+    assert result.ownership_refused is False
+    assert result.eligibility_retried is True
