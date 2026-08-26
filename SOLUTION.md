@@ -2,6 +2,8 @@
 
 ## Architecture
 
+![Architecture overview](docs/architecture.svg)
+
 Trendly handles roughly 2,000 support chats a day, and the large majority are
 plain status checks — *where is it, when does it arrive, did it ship*. For
 those the order record **is** the answer: there is nothing to retrieve and
@@ -9,6 +11,14 @@ nothing for a 70B-class model to reason about. Running every message through
 one uniform agent loop would mean paying retrieval and 70B inference on the
 cheapest, most repetitive traffic in the queue. So the architecture routes
 around that cost rather than absorbing it.
+
+Named plainly, the orchestration is a **router pattern wrapping a bounded
+ReAct loop**. At the top level tier 1's classifier dispatches each message
+down exactly one of four paths — that is the router. Inside tier 3, and only
+there, the model reasons between tool calls and iterates until it has an
+answer or hits `max_tool_iterations` — that is the ReAct loop, bounded. It is
+not a sequential chain, and there is no planner: nothing decomposes a request
+into steps ahead of time.
 
 Every message hits a cheap classifier first, then takes one of four paths.
 
@@ -24,8 +34,10 @@ model was unavailable would answer confidently from a half-built context.
 
 **Tier 2 — the templated fast path.** `order_status` with a known order and a
 status the record fully answers (`in_transit`, `delivered`, `cancelled`,
-`partially_shipped`) is rendered from a template. **No model call, no
-retrieval.** This is where the cost argument is actually collected. Statuses
+`partially_shipped`) is rendered from a template. **No agent-model call and
+no retrieval.** Precisely: tier 1's small-model classification has already
+happened, so the path is cheap rather than free — what it skips is the 120B
+model and the index. This is where the cost argument is actually collected. Statuses
 whose correct answer depends on policy are deliberately excluded — `delayed`
 and `lost_in_transit` need more than the record, so they fall through.
 
@@ -41,6 +53,20 @@ six tool iterations. The cap matters more than it looks: a model that cannot
 find a fact will keep re-querying with slightly different wording until it
 times out, and with a cap, exhausting the budget is itself a signal that the
 question needs a human rather than another attempt.
+
+![Tier 3 detail](docs/tier3-detail.svg)
+
+Both diagrams share one colour legend, so the meaning carries from the
+overview into the zoom-in without being re-learned: **purple** for model
+reasoning, **teal** for a cheap or deterministic path, **coral** for a safety
+or grounding checkpoint, **grey** for neutral start and end points.
+
+On the cap itself, honestly: six was chosen as a round number early in the
+build, not derived from data. The heaviest turns actually observed —
+eligibility plus staging a return — use four tool calls, so six leaves
+headroom without being unbounded. It is a defensible default rather than a
+tuned one, and against real traffic it is the first constant worth
+re-deriving from the observed distribution of tool calls per turn.
 
 Retrieval underneath it is hybrid — dense embeddings plus BM25 over 28 policy
 chunks, fused with reciprocal rank fusion. Neither retriever is sufficient
@@ -71,6 +97,15 @@ is not working. Every handoff carries a structured packet built from
 conversation state — order, customer, prior order IDs, which checks were
 already performed — never from model prose, so the human picking it up can see
 what was already ruled out instead of just that the bot gave up.
+
+**The context window does not grow with the conversation.** Each turn builds a
+fresh, short message list — system prompt, the current message, and a one-line
+hint naming the active order — rather than replaying the transcript. Continuity
+comes from `ConversationState`'s structured fields instead: the active order,
+prior order ids, the pending question, the checks already performed. Those act
+as a continuously updated summary that is written by code rather than by a
+model, so it costs no tokens to maintain, cannot drift the way an
+LLM-generated running summary does, and keeps turn twenty as cheap as turn one.
 
 ## Key trade-offs
 
@@ -337,12 +372,175 @@ than downloaded on first use — which also dropped steady-state memory from
 297MB, because the model is now mapped from disk instead of pulled through the
 process on first use. The image is 1.12GB. Both fit a 512MB free tier.
 
+**The business outcome, stated directly:** because tier 1 routes the bulk of
+traffic to a template, the majority of Trendly's ~2,000 daily conversations
+never reach a model that costs anything meaningful to run — the expensive
+120B path is paid for only on the minority of turns that genuinely need
+reasoning, and that ratio is the whole return on the tiered design.
+
 **Cost:** zero. Groq's free tier covered every call in development, the harness
 runs and the deployment, with no paid spend at any point. The architecture is
 the reason that is not a coincidence: the majority of Trendly's daily volume is
 plain status checks, and those never reach a model that costs anything to run —
 tier 2 answers them from the order record with one small-model routing call, and
 the 120B model is only paid for on the traffic that genuinely needs reasoning.
+
+## Production readiness
+
+What would have to be true before this ran for real, and what is not true yet.
+
+### Deployment topology
+
+Single process, single instance, `ConversationStore` holding sessions in a
+dict. No horizontal scaling, and every conversation is lost on restart. Two
+replicas behind a load balancer would split sessions between them, which
+matters more than it sounds: identity is bound to a session by the first
+successful order lookup, so a customer whose second turn lands on the other
+replica arrives unbound and re-binds on whatever order they name next.
+
+This was designed to be replaced rather than left by accident —
+`ConversationStore`'s own docstring says so, and `ConversationState` has no
+framework dependency precisely so the swap is a change to one class. Designed
+to be replaceable is not the same as replaced, and it has not been replaced.
+
+### No metrics backend
+
+Nothing is instrumented. In production the numbers worth a dashboard are:
+
+- **automation rate** — conversations closed without a human, the headline
+- **tier distribution** — what share resolves at the fast path versus the agent
+  loop versus escalation, which is the cost model made observable
+- **citation-guard retry rate** and how often the retry then fails, which is
+  the grounding health of the system
+- **eligibility-bypass rate**, same argument for the other guard
+- **escalation reasons**, broken out — a spike in `policy_not_covered` is a
+  content gap, a spike in `iteration_cap_reached` is a retrieval gap, and they
+  need different fixes
+- **p50/p90 latency per tier**, separately, because a single blended number
+  hides the thing that matters
+- **tokens and cost per conversation**, split by tier
+
+The current proxies are structured log lines (session, turn, intent, tools,
+guard warnings) and the harness's own scorecard. Both are adequate for a build
+of this size and neither is a metrics pipeline.
+
+### No durable audit log
+
+Logging is `logging.basicConfig(level=logging.INFO)` and nothing else: stdout
+only, no file handler, no external sink, no database. Verified rather than
+assumed — there is no `FileHandler`, no `dictConfig`, nothing in `app/` opens a
+file for writing, and Chroma runs as an `EphemeralClient`. Whatever the
+platform captures from stdout is the entire record.
+
+That is fine for this scope and would not be for a system where a refund
+decision has to be reconstructable months later. A returns assistant is
+plausibly in that category, so this is a real gap rather than a stylistic one.
+What logs do carry is deliberately thin on personal data: session ids, order
+ids, intents, tool names, counts. No email, phone, or payment detail — none of
+which reaches the model either, since `get_order_status` returns an explicitly
+constructed record with no contact fields in it.
+
+### No real upstream authentication
+
+There is no auth on `/chat`. Session identity is a **proxy**: the first order a
+caller successfully names binds the session to that customer. It holds up under
+direct attack — the harness pushes on it three separate ways and the ownership
+check refuses every one — but the property it actually provides is *"whoever
+knows an order number is that customer for this session"*, which is not
+authentication.
+
+Framed as least privilege, the boundary is in the wrong place. The system is
+correctly scoped *once bound* — one order at a time, ownership-gated, no tool
+that reads across customers, no field in the response that identifies a person.
+What is missing is any verification of the principal that boundary is drawn
+around. It is discovery question 3 for exactly that reason, and the answer
+changes whether the cross-customer guard is defence in depth or the only thing
+standing there.
+
+### Automation rate — a proxy, and a poor one
+
+A real automation rate needs real traffic. Computing one from ten fixed orders
+would be false precision, so here is the only honest version: across the 18
+scripted harness conversations in the most recent valid run, **13 of 18 cases
+(72%) escalated at some point** and 5 resolved without a human; at turn level,
+**20 of 69 turns (29%) escalated**.
+
+That number is not an automation rate and should not be quoted as one. **It
+runs in the wrong direction on purpose.** The case set is adversarial by
+construction — a third of it exists specifically to force a handoff (lost
+parcel, requested human, cross-customer attempts, ambiguity, discount pressure,
+authority claims), and several of those escalations are the *correct* answer
+rather than a failure. A real queue is dominated by *"where is my order"*, which
+the fast path closes without a human every time. So 72% is best read as a
+ceiling on escalation under deliberately hostile input, and the true automation
+rate on production traffic would be far higher. Tier distribution across the
+same run — 14% fast path, 22% structural escalation, 20% template, 36% agent
+loop — is similarly skewed and similarly not a forecast.
+
+### A concurrency check on the fast path
+
+`scripts/fastpath_concurrency.py` fires simultaneous order-status questions at a
+local instance using `concurrent.futures`. Every question is one the templated
+path answers, so the 120B model is never called and the run costs nothing
+meaningful.
+
+Twenty at once: **20/20 returned HTTP 200, no errors, no crashes, and no
+cross-order contamination** — no reply contained another order's details.
+Latency p50 was 11.07s under that burst. Eight at once: **8/8 succeeded and
+6/6 answerable orders returned the correct record**, p50 2.05s.
+
+The interesting part is the difference. At twenty, eleven turns came back with
+the clarifying template instead of an order answer — because the fast path
+still makes one tier-1 classification call, and a burst of twenty trips the
+router model's per-minute rate limit. The gate then fails closed to `ambiguous`
+and asks a question, which is the designed behaviour rather than a fault. So
+the ceiling under burst is the upstream API quota, not contention inside the
+application.
+
+**What this proves:** the templated path has no shared-state contention problem
+under concurrent load, and per-session isolation holds when many sessions are
+served at once. **What it does not prove:** anything about tier 3 under load,
+anything about production traffic shape — twenty requests against ten fixtures
+arriving as a thundering herd is not 2,000 chats a day — and nothing at all
+about the deployed single-instance topology, which remains the known gap
+described above. It is a targeted check, not a load test of the system.
+
+### Path to scale, bottleneck by bottleneck
+
+Each of these is a different problem with a different fix, and they arrive in
+roughly this order.
+
+**The knowledge base grows.** 28 chunks fit in memory and rebuild in about a
+second at startup. At a few thousand, the in-process `EphemeralClient` stops
+being sensible: move to a persistent or hosted vector store, shard the index by
+document or section, and build it as a deploy artifact rather than at boot —
+otherwise startup time becomes the deploy bottleneck. `RRF_K = 2` is tuned for a
+tiny corpus and would need re-deriving; at scale the conventional 60 becomes
+the right constant again.
+
+**Traffic grows.** Multiple FastAPI instances behind a load balancer, which
+immediately forces the session store out of process. Redis, keyed by session
+id, with a TTL — conversations are not durable objects and should expire.
+Concurrent turns on the same session need optimistic concurrency: read the
+state with its version, write back conditionally, retry on conflict. Without
+that, two rapid messages on one session can interleave and lose the
+`active_order_id` correction, which is precisely the state that ownership
+depends on.
+
+**LLM latency dominates.** It already does — tier 3 is 13s at p50 against 0.71s
+for tier 2. Prompt caching on the static system prompt is the cheapest win,
+since it is identical on every call. Response caching helps for the genuinely
+repetitive policy questions, keyed on the retrieved chunk set rather than the
+raw question so paraphrases share an entry. Streaming does not make anything
+faster but changes how a 30-second wait feels, which on this hardware is the
+larger perceived problem.
+
+**Retrieval quality degrades at a larger corpus.** More chunks means more
+near-misses. Metadata filtering first — restrict to the relevant section before
+ranking — then a cross-encoder reranker over the fused candidates, then finer
+chunking with overlap so a clause split across a boundary is still retrievable.
+That is also the point at which the retrieval evaluation stops being optional,
+because none of those changes can be judged without one.
 
 ## Known limitations
 
