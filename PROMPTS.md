@@ -40,6 +40,14 @@ Rules:
   the customer has told you exactly which order they mean.
 - A message that is only an order ID, or an order ID with almost no other words,
   is order_status unless the conversation so far was about returns.
+- A short reply that answers a question the assistant has just asked -- a size,
+  a yes or no, a confirmation, a single bare value -- is NOT ambiguous. This
+  applies when, and only when, the context above contains a sentence beginning
+  "The assistant has already asked the customer for ...", which names what is
+  still outstanding. In that case the customer is answering, not starting a new
+  unclear request: return the SAME intent as the previous message. If no such
+  sentence appears in the context, no question is outstanding and the normal
+  ambiguous rules below apply unchanged.
 - A greeting or pleasantry that contains no request ("hi", "hello", "you there?")
   is ambiguous, not out_of_scope: the customer has not said what they need yet.
   out_of_scope is only for messages that clearly ask about something outside
@@ -91,11 +99,19 @@ HARD LIMITS:
 
 USING TOOLS:
 - Call get_order_status before saying anything about a specific order. Never describe an order from memory.
+- Once check_return_eligibility confirms an item is eligible, call raise_return_request to actually raise it. Do not tell the customer that a human colleague will start their return -- you can start it yourself, and saying otherwise sends them away for something you have just done.
+- If the resolution is an exchange and you do not yet know which size the customer wants, ask them in plain language and wait. Do not call raise_return_request with a missing size and never guess a size.
 - Escalate when the policy does not cover the question, the customer asks for a human, a parcel is lost, or you cannot resolve the request.
+
+HANDLING A RETURN REQUEST -- three outcomes, and only one of them involves a human:
+- Eligible and you have everything you need: raise it, confirm it is raised, and say what happens next using the timelines the tool returned.
+- Eligible but something is missing (usually the size for an exchange): ask for exactly that one thing. Do not raise a partial request.
+- Not eligible: say so, give the reason the tool gave, and do not raise anything. A human cannot override this either, so do not imply one could.
 
 STYLE:
 - Warm, brief, and concrete. Two or three short sentences is usually right.
 - Acknowledge the problem before quoting a rule. A customer whose parcel is two weeks late needs to hear that first.
+- Offer a human when one is genuinely needed -- a lost parcel, a request for a person, something the policy does not cover -- not as a default sign-off on a request you have already handled.
 - Never invent tracking numbers, dates, or order IDs.
 ```
 
@@ -117,13 +133,21 @@ not to prevent the action.
 
 ## Iteration history
 
-> **A note on what follows.** This repository has no commit history — it is a
-> working tree with zero commits — and the prompt edits below predate the
-> session in which this document was written. The rules those edits added are
-> quoted verbatim from the current files and are exact; the *prior* wording is
-> reconstructed from the shape of the fix and is marked where that is the case.
-> Where the before-text matters, it should be replaced with the real thing
-> rather than trusted from here.
+> **A note on sourcing.** This repository has real commit history — 20 commits,
+> beginning at `32e3de8` — so most of what is documented here is verifiable
+> against a diff. Two of the four entries below are not, and the difference
+> matters.
+>
+> **The first three entries predate `git init` entirely.** No commit exists from
+> before those edits were made, so there is no diff to quote. In each case the
+> rule that was *added* is quoted verbatim from the current file and is exact;
+> the *prior* wording is reconstructed from the shape of the fix and is marked
+> as such where it appears. Treat those before-texts as a faithful account of
+> what the fix addressed, not as a transcript.
+>
+> **The fourth entry is backed by a real commit** (`b5d96a7`) and its
+> before-and-after is quoted from `git show`, not reconstructed. Anything
+> documented from here on has that same footing.
 
 ### Greetings were routed out of scope
 
@@ -226,7 +250,7 @@ checkable, and the explicit "do not say you will arrange it yourself" targets
 the exact phrasing that was appearing.
 
 **This one is worth reading as an argument against prompt fixes.** It is the
-weakest of the three, because it is a prompt instruction guarding a real
+weakest of the four, because it is a prompt instruction guarding a real
 capability gap, and the same class of failure recurred somewhere the prompt did
 not reach: the harness later caught the assistant saying *"I'll forward this to
 a human colleague"* on a lost parcel with `escalated: false` and no
@@ -235,3 +259,86 @@ That was fixed structurally instead, by escalating `requires_human` orders in
 tier 2 before the model gets a turn. The prompt rule remains useful for the
 cases structure cannot reach, but the lesson recorded in SOLUTION.md's
 trade-offs section is that where a guarantee has to hold, it belongs in code.
+
+### A bare answer to the assistant's own question routed to `ambiguous`
+
+*Unlike the three above, this one is sourced from a real diff:*
+`git show b5d96a7 -- app/prompts/intent_gate.py`.
+
+**What broke.** Once the assistant started asking for a missing exchange size,
+it created a message shape the router had never seen: a bare answer to a
+question it had itself just asked. Harness case `c18` turn 3 did exactly the
+right thing —
+
+> *"Since the Oxford Shirt is a final-sale item, you can exchange it for a
+> different size. Which size would you like instead?"*
+
+— and the customer's reply, *"size L please"*, was classified `ambiguous`. No
+order id, no return vocabulary, just a size. So it never reached the agent
+loop and the exchange was never staged. Nothing had failed: the gate routed it
+precisely as it had been told to. Adding a question to the assistant's
+repertoire had quietly invalidated an assumption in the router's rules.
+
+**What changed.** Two real additions, quoted from the commit. A rule in
+`INTENT_GATE_SYSTEM`:
+
+```diff
++- A short reply that answers a question the assistant has just asked -- a size,
++  a yes or no, a confirmation, a single bare value -- is NOT ambiguous. This
++  applies when, and only when, the context above contains a sentence beginning
++  "The assistant has already asked the customer for ...", which names what is
++  still outstanding. In that case the customer is answering, not starting a new
++  unclear request: return the SAME intent as the previous message. If no such
++  sentence appears in the context, no question is outstanding and the normal
++  ambiguous rules below apply unchanged.
+```
+
+and the third piece of context that makes the rule checkable, in
+`context_hint()`:
+
+```diff
+-def context_hint(active_order_id: str | None, last_intent: str | None) -> str:
++def context_hint(
++    active_order_id: str | None,
++    last_intent: str | None,
++    pending_question: str | None = None,
++) -> str:
+     """Minimal prior context so pronouns resolve without replaying the transcript."""
+-    if not active_order_id and not last_intent:
++    if not active_order_id and not last_intent and not pending_question:
+         return "No prior context: this is the first message of the conversation."
+     parts = []
+     if active_order_id:
+         parts.append(f"The order under discussion so far is {active_order_id}.")
+     if last_intent:
+         parts.append(f"The previous message was classified as {last_intent}.")
++    if pending_question:
++        # The concrete thing the pending-answer rule checks against. Absent
++        # this sentence, that rule does not apply and the normal ones do.
++        parts.append(
++            "The assistant has already asked the customer for "
++            f"{pending_question} and is waiting for that answer."
++        )
+     return " ".join(parts)
+```
+
+**Why this fix.** The rule is deliberately conditional rather than general. A
+blanket *"short replies continue the previous intent"* would swallow every
+terse message in the product, including the genuinely vague ones that
+`ambiguous` exists to catch. Tying it to a specific sentence the context hint
+either contains or does not means the rule has something concrete to test, and
+the ordinary rules are untouched whenever nothing is outstanding. Probing the
+live classifier confirms both halves: with a pending question, *"size L
+please"*, *"L"*, *"medium"* and *"yes please"* all classify
+`eligibility_check`; without one, the same messages still classify `ambiguous`.
+
+**And the part worth recording.** The first version of this fix looked right
+and did not work. `pending_question` was only being set when
+`raise_return_request` came back needing a size — but the system prompt tells
+the model to ask for a missing size *in prose* rather than calling the staging
+tool and letting it fail, so that path never ran and the flag was never set.
+The harness case passed anyway, on luck of classification, and a direct
+two-turn call against the running service is what exposed it. The signal now
+comes from what the assistant actually said: a reply ending in a question mark
+records that something is outstanding, and anything else clears it. A test that
+passes for the wrong reason is worse than one that fails.

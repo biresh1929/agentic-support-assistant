@@ -5,7 +5,8 @@ answers questions about orders, shipping, returns, refunds and exchanges from
 Trendly's own order records and policy document — and hands off to a human when
 it should, rather than guessing.
 
-One endpoint, `POST /chat`, plus `GET /health`.
+`POST /chat` is the API, `GET /health` reports readiness, and `GET /` serves a
+small chat page for trying it by hand.
 
 - **[SOLUTION.md](SOLUTION.md)** — architecture, trade-offs, questions for ops, known limitations
 - **[PROMPTS.md](PROMPTS.md)** — both prompts in full, and what changed in them and why
@@ -14,6 +15,12 @@ One endpoint, `POST /chat`, plus `GET /health`.
 ## Live deployment
 
 **https://trendly-assistant.onrender.com**
+
+Open that in a browser and you get the chat UI, not JSON — `GET /` serves a
+single-file demo page. It is the quickest way to see the thing work: each
+assistant turn shows the tools it called as small pills, so a fast-path answer
+visibly uses one tool and a staged return uses four, and any turn that hands
+off is marked with its escalation reason. The API is unchanged underneath.
 
 ```bash
 curl https://trendly-assistant.onrender.com/health
@@ -63,6 +70,13 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
+### The demo page
+
+With the server running, open **http://localhost:8000/**. One static HTML
+file, no build step and no dependencies — it posts to the same `/chat` the
+curl examples below use, and renders each turn's `tools_called` and
+`escalation_reason` so the routing is visible while you talk to it.
+
 ### Checking it works
 
 ```bash
@@ -95,7 +109,7 @@ customer's order is refused from then on.
 ### Tests
 
 ```bash
-python -m pytest                       # 128 unit + contract tests, no network
+python -m pytest                       # 175 unit + contract tests, no network
 
 # conversation harness -- needs a running instance and a real API key
 python harness/run_conversations.py   --service http://localhost:8000 --out runs/latest
@@ -116,13 +130,14 @@ The dataset is ten fixed orders across four customers, with the clock pinned to
 | Ask about | What should happen |
 |---|---|
 | `TR-4521` — where is it? | Templated answer, no model call at all |
-| `TR-4530` — can I return the kurta? | In window, returnable: yes |
+| `TR-4530` — can I return the kurta? | In window and returnable, so the return is **raised**, not just described |
 | `TR-4527` — return the earrings? | Refused on **category** (jewellery, 2.3), not on date |
 | `TR-4523` — return the jacket? | Refused on **date** (54 days, past 2.1) |
-| `TR-4528` — refund the shirt? | Final sale: size exchange only, no refund (2.4) |
+| `TR-4528` — refund the shirt? | Final sale: refund refused, and it **asks which size** you want instead (2.4) |
 | `TR-4526` — where is it? | Lost parcel: escalates in code before the model is consulted |
 | Ask for 30% off | Declined — there is no discount tool to invoke |
 | Ask about another customer's order | Refused, and the session stays bound to you |
+| Reply `size L` after it asks | The bare answer continues the return, and the exchange is staged |
 
 ## A note on AI assistance
 
@@ -166,12 +181,25 @@ typing was not.
   out that the RRF constant of 60 was flattening rank signal across only 28
   chunks; finding that a scorer bug was awarding 48/100 to a service that
   answered nothing, because negative checks pass vacuously against silence.
+- **Working the harness's findings through to fixed and verified.** Four real
+  bugs were caught and closed this way, each landing as its own commit with a
+  regression test and each re-checked against the live deployment rather than
+  only asserted: a fabricated handoff on lost parcels (the assistant promised a
+  human with no ticket behind it, on one run and not the next), cross-customer
+  session binding (an opening eligibility check left the session unbound, so the
+  next turn could name any order and receive it in full), an eligibility-tool
+  bypass (verdicts reasoned from raw policy text instead of the deterministic
+  tool), and a pending-question routing gap (a bare *"size L please"* classified
+  as ambiguous, so the exchange never staged). The last of those took two
+  attempts — the first fix passed its harness case by luck and failed a direct
+  call, which is in PROMPTS.md.
 - Test writing, docstrings, and these documents — drafted from the decisions
   and the evidence above, then reviewed and corrected by me.
 
 Where this document states a measured number, it was measured in this repo.
 Two claims that could have been asserted are deliberately absent because they
 could not be: there is no retrieval evaluation backing the embedding choice,
-and the prompt iteration history in PROMPTS.md reconstructs its before-text
-rather than quoting commits, because the repo has none. Both are flagged where
+and three of the four prompt iterations in PROMPTS.md reconstruct their
+before-text rather than quoting commits, because those edits predate `git init`.
+Both are flagged where
 they appear.

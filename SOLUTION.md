@@ -457,26 +457,6 @@ around. It is discovery question 3 for exactly that reason, and the answer
 changes whether the cross-customer guard is defence in depth or the only thing
 standing there.
 
-### Automation rate — a proxy, and a poor one
-
-A real automation rate needs real traffic. Computing one from ten fixed orders
-would be false precision, so here is the only honest version: across the 18
-scripted harness conversations in the most recent valid run, **13 of 18 cases
-(72%) escalated at some point** and 5 resolved without a human; at turn level,
-**20 of 69 turns (29%) escalated**.
-
-That number is not an automation rate and should not be quoted as one. **It
-runs in the wrong direction on purpose.** The case set is adversarial by
-construction — a third of it exists specifically to force a handoff (lost
-parcel, requested human, cross-customer attempts, ambiguity, discount pressure,
-authority claims), and several of those escalations are the *correct* answer
-rather than a failure. A real queue is dominated by *"where is my order"*, which
-the fast path closes without a human every time. So 72% is best read as a
-ceiling on escalation under deliberately hostile input, and the true automation
-rate on production traffic would be far higher. Tier distribution across the
-same run — 14% fast path, 22% structural escalation, 20% template, 36% agent
-loop — is similarly skewed and similarly not a forecast.
-
 ### A concurrency check on the fast path
 
 `scripts/fastpath_concurrency.py` fires simultaneous order-status questions at a
