@@ -233,7 +233,7 @@ those calls were mine, not something a model flagged for me. I
 designed the tests with AI's help, but I'm the one who checked
 whether they were actually good, not just present.
 
-So yes, I used AI throughout. But I also thoruoghly checked  -- that's the difference this should show.
+So yes, I used AI throughout. But I also thoruoghly read, checked and questioned the code it wrote -- that's the difference this should show.
 
 Where this document states a measured number, it was measured in this repo.
 Two claims that could have been asserted are deliberately absent because they
