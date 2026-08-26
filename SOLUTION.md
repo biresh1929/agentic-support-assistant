@@ -269,32 +269,22 @@ question underneath most of the ones below.
 
 ## Five questions for Trendly's ops team
 
-**1. How often does the policy document actually change, and do answers given
-under a previous version need to be flagged as potentially superseded?**
-Right now the policy is chunked and indexed in memory at startup, with no
-version stamp on it and none on the answers. If the return window moves from
-30 days to 21, every conversation already in flight starts giving a different
-answer mid-thread, and every answer in last month's transcripts silently
-becomes wrong without anything marking it. The cheap fix — stamp a policy
-version on each response and log it — is only worth building if the document
-moves more than once or twice a year. If it changes monthly, or if a customer
-can hold Trendly to an answer given under the old version, that changes the
-design: answers need to record which version they were given under, and
-superseding a version needs a way to find and flag what it invalidates.
+**1. What percentage of your 2,000 daily chats are pure status/FAQ
+versus genuinely need a decision -- a return, an exchange, an
+exception?** The brief assumes 70/30. I'd want the real number before
+committing engineering time to a tiered design, because if it's closer
+to 90/10, the fast path matters even more than I built for; if it's
+50/50, the agent loop needs to carry more of the weight than I gave it.
 
-**2. What does the real escalation volume look like, against the ~70/30 split
-in the brief?** Two things ride on this, and they pull in opposite directions.
-If escalations are much rarer than 30%, the deterministic tiers are doing more
-work than assumed and the model budget could shrink further. If they are much
-more common, the handoff path stops being an exit and becomes a main path,
-which makes the quality of the escalation packet more important than the
-quality of the answers. Related and more concrete: **does staging a handoff
-need to be idempotent?** A lost-parcel conversation currently re-stages the
-handoff on every turn, which is right for the customer — they keep being told a
-human has it — and possibly wrong for the ticketing system if each staging
-creates a ticket.
+**2. How much privilege should the assistant actually have?** I built
+to least-privilege by default -- every tool scoped to one order at a
+time, no batch access, no customer PII beyond an opaque ID reaching the
+model at all, verified field by field. But that was my default, not a
+confirmed requirement. I'd want Trendly to actually agree to that
+boundary rather than inherit it from what I assumed.
 
-**3. Is the customer already authenticated before they reach `/chat`?** This is
+**3. What should this assistant never be allowed to expose, and is
+the customer already authenticated before they reach `/chat`?** This is
 the question with the largest blast radius. There is no auth on the endpoint,
 so the strongest available proxy for identity is that the first order
 successfully looked up binds the session to that customer. That works, and the
